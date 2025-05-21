@@ -48,9 +48,9 @@ struct Status {
     enum : u32 {
         BUSY = 0b0000'0000'0000'0000'0000'0000'0000'0001, // ssi busy flag
         TFNF = 0b0000'0000'0000'0000'0000'0000'0000'0010, // transmit fifo not full
-        TFE  = 0b0000'0000'0000'0000'0000'0000'0000'0100, // transmit fifo full
+        TFE  = 0b0000'0000'0000'0000'0000'0000'0000'0100, // transmit fifo empty
         RFNF = 0b0000'0000'0000'0000'0000'0000'0000'1000, // receive fifo not full
-        RFE  = 0b0000'0000'0000'0000'0000'0000'0001'0000, // receive fifo full
+        RFF  = 0b0000'0000'0000'0000'0000'0000'0001'0000, // receive fifo full
         TXE  = 0b0000'0000'0000'0000'0000'0000'0010'0000, // transmission error
         DCOL = 0b0000'0000'0000'0000'0000'0000'0100'0000, // data collision error
     };
@@ -106,33 +106,34 @@ struct SPIControl0 {
 };
 
 struct Regs {
-    v32  control0;                         // ctrlr0
-    v32  control1;                         // ctrlr1
-    v32  ssi_enable;                       // ssienr
-    v32  microwire_control;                // mwcr
-    v32  slave_enable;                     // ser
-    v32  baud_rate;                        // baudr
-    v32  tx_fifo_threahold_level;          // txftlr
-    v32  rx_fifo_threahold_level;          // rxftlr
-    cv32 tx_fifo_level;                    // txflr
-    cv32 rx_fifo_level;                    // rxflr
-    cv32 status;                           // sr
-    v32  interrupt_mask;                   // imr
-    cv32 interrupt_status;                 // isr
-    cv32 raw_intrerrupt_status;            // risr
-    cv32 tx_fifo_overflow_interrupt_clear; // txoicr
-    cv32 rx_fifo_overflow_interrupt_clear; // rxoicr
-    cv32 multi_master_interrupt_clear;     // msticr
-    cv32 interrupt_clear;                  // icr
-    v32  dma_control;                      // dmacr
-    v32  dma_tx_data_level;                // dmatdlr
-    v32  dma_rx_data_level;                // dmardlr
-    cv32 identification;                   // idr
-    cv32 version_id;                       // ssi_version_id
-    v32  data_register[36];                // dr0
-    v32  rx_sample_delay;                  // rx_sample_dly
-    v32  spi_control0;                     // spi_ctrlr0
-    v32  tx_drive_edge;                    // txd_drive_edge
+    v32  control0;                          // ctrlr0
+    v32  control1;                          // ctrlr1
+    v32  ssi_enable;                        // ssienr
+    v32  microwire_control;                 // mwcr
+    v32  slave_enable;                      // ser
+    v32  baud_rate;                         // baudr
+    v32  tx_fifo_threahold_level;           // txftlr
+    v32  rx_fifo_threahold_level;           // rxftlr
+    cv32 tx_fifo_level;                     // txflr
+    cv32 rx_fifo_level;                     // rxflr
+    cv32 status;                            // sr
+    v32  interrupt_mask;                    // imr
+    cv32 interrupt_status;                  // isr
+    cv32 raw_intrerrupt_status;             // risr
+    cv32 tx_fifo_overflow_interrupt_clear;  // txoicr
+    cv32 rx_fifo_overflow_interrupt_clear;  // rxoicr
+    cv32 rx_fifo_underflow_interrupt_clear; // rxuicr
+    cv32 multi_master_interrupt_clear;      // msticr
+    cv32 interrupt_clear;                   // icr
+    v32  dma_control;                       // dmacr
+    v32  dma_tx_data_level;                 // dmatdlr
+    v32  dma_rx_data_level;                 // dmardlr
+    cv32 identification;                    // idr
+    cv32 version_id;                        // ssi_version_id
+    v32  data_register[36];                 // dr0
+    v32  rx_sample_delay;                   // rx_sample_dly
+    v32  spi_control0;                      // spi_ctrlr0
+    v32  tx_drive_edge;                     // txd_drive_edge
 };
 } // namespace ssi
 

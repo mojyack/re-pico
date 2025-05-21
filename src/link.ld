@@ -7,12 +7,13 @@ MEMORY {
 
 SECTIONS {
     .boot2 : {
-        *(.boot2*)
+        *(.boot2)
         . = ORIGIN(flash) + 252;
-        *(.crc*)
+        *(.crc)
     } > flash
 
     .text : {
+        *(.entry)
         *(.text*)
     } > flash
 }
