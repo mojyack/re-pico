@@ -13,7 +13,16 @@ SECTIONS {
     } > flash
 
     .text : {
-        *(.entry)
+        *(.vector)
         *(.text*)
     } > flash
+
+    .ARM.exidx : {
+        *(.ARM.exidx*)
+    } > flash
+
+    .stack (NOLOAD) : {
+        . = ORIGIN(sram) + LENGTH(sram);
+        stack_top = .; 
+    } > sram
 }

@@ -1,3 +1,4 @@
+#include "m0plus.hpp"
 #include "math.hpp"
 #include "spi-flash/w25q80.hpp"
 #include "ssi.hpp"
@@ -9,8 +10,6 @@ namespace {
 auto wait_and_read(u8 count) -> u32;
 auto read_flash_sreg(u8 status_command) -> u8;
 } // namespace
-
-// #include "boot2-stub.cpp"
 
 __attribute__((section(".boot2"))) auto boot_stage2() -> void {
     SSI_REGS.ssi_enable = 0;
@@ -58,8 +57,9 @@ __attribute__((section(".boot2"))) auto boot_stage2() -> void {
         BF(ssi::SPIControl0::TRANS_TYPE, ssi::SPIControl0TransType::_2C2A);
     SSI_REGS.ssi_enable = 1;
 
-    const auto entry = (void (*)())0x10000101;
-    entry();
+    M0PLUS_REGS.vector_table_offset = XIP_BASE + 0x100;                     // set vector table offset
+    asm("msr msp, %0" ::"r"(((void**)M0PLUS_REGS.vector_table_offset)[0])); // set stack pointer
+    asm("bx %0" ::"r"(((void**)M0PLUS_REGS.vector_table_offset)[1]));       // jump to entry
 }
 
 namespace {
