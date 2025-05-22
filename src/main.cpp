@@ -5,6 +5,7 @@
 #include "resets.hpp"
 #include "rosc.hpp"
 #include "sio.hpp"
+#include "timer.hpp"
 #include "wd.hpp"
 #include "xosc.hpp"
 
@@ -48,8 +49,18 @@ auto init_system() -> void {
     // stop rosc
     ROSC_REGS.control = ROSC_REGS.control & ~rosc::Control::ENABLE | BF(rosc::Control::ENABLE, rosc::ControlEnable::DISABLE);
     // enable 64-bit timer
-    WATCHDOG_REGS.tick = BF(wd::Tick::CYCLES, 12); // 1us = 12cycles / 12MHz
+    WATCHDOG_REGS.tick |= BF(wd::Tick::CYCLES, 12); // 1us = 12cycles / 12MHz
     unreset(resets::ResetNum::TIMER);
+}
+
+auto read_time() -> u64 {
+    return TIMER_REGS.time_low_read | u64(TIMER_REGS.time_high_read) << 32;
+}
+
+auto usleep(u64 us) -> void {
+    auto start = read_time();
+    while(read_time() - start < us) {
+    }
 }
 
 auto entry() -> void {
@@ -57,12 +68,8 @@ auto entry() -> void {
     SIO_REGS.gpio_out_set = 1 << 25;
     init_system();
     while(true) {
-        for(auto i = 0; i < 300000; i += 1) {
-            SIO_REGS.gpio_out_set = 1 << 25;
-        }
-        for(auto i = 0; i < 300000; i += 1) {
-            SIO_REGS.gpio_out_clr = 1 << 25;
-        }
+        SIO_REGS.gpio_out_xor = 1 << 25;
+        usleep(50000);
     }
 }
 } // namespace

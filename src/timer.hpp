@@ -2,7 +2,7 @@
 #include "address-map.hpp"
 #include "int.hpp"
 
-namespace tiemr {
+namespace timer {
 struct DebugPause {
     enum : u32 {
         DBG0 = 0b0000'0000'0000'0000'0000'0000'0000'0010,
@@ -26,6 +26,6 @@ struct Regs {
     v32  interrupt_force;  // INTF
     cv32 interrupt_status; // INTS
 };
-} // namespace tiemr
+} // namespace timer
 
 #define TIMER_REGS (*(timer::Regs*)(TIMER_BASE))
