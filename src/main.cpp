@@ -1,20 +1,61 @@
+#include "clocks.hpp"
 #include "io-bank0.hpp"
+#include "math.hpp"
+#include "pll.hpp"
 #include "resets.hpp"
+#include "rosc.hpp"
 #include "sio.hpp"
+#include "wd.hpp"
+#include "xosc.hpp"
+
+#define BF(field, value) value << math::log2<field>
 
 namespace {
-auto enable_gpio_25() -> void {
-    RESETS_REGS.reset &= ~(resets::ResetNum::IO_BANK0);
-    while(!(RESETS_REGS.reset_done & resets::ResetNum::IO_BANK0)) {
+auto wait_for_bit(cv32& reg, const u32 mask) -> void {
+    while(!(reg & mask)) {
     }
+}
+
+auto unreset(const u32 reset_num) -> void {
+    RESETS_REGS.reset &= ~reset_num;
+    wait_for_bit(RESETS_REGS.reset_done, reset_num);
+}
+
+auto enable_gpio_25() -> void {
+    unreset(resets::ResetNum::IO_BANK0);
 
     IOBANK0_REGS.status_control[25].control = iobank0::GPIOControlFuncSel::SIO;
 
     SIO_REGS.gpio_oe_set = 1 << 25;
 }
 
+auto init_system() -> void {
+    // enable xosc
+    XOSC_REGS.control |= BF(xosc::ControlEnable::ENABLE, xosc::Control::ENABLE);
+    wait_for_bit(XOSC_REGS.status, xosc::Status::STABLE);
+    // enable system pll
+    unreset(resets::ResetNum::PLL_SYS);
+    PLL_SYS_REGS.feedback_div = 100; // VCO clokc = 12MHz * 100 = 1.2GHz
+    PLL_SYS_REGS.power_down &= ~(BF(pll::PowerDown::PD, 1) | BF(pll::PowerDown::VCOPD, 1));
+    wait_for_bit(PLL_SYS_REGS.control_and_status, pll::ControlAndStatus::LOCK);
+    PLL_SYS_REGS.primary = BF(pll::Primary::POSTDIV1, 6) | BF(pll::Primary::POSTDIV2, 2); // 1.2GHz / 6 / 2 = 100MHz
+    PLL_SYS_REGS.power_down &= ~(BF(pll::PowerDown::POSTDIVPD, 1));
+    // setup clock generators
+    CLOCKS_REGS.clock_ref.control |= BF(clocks::RefClockControl::SRC, clocks::RefClockSource::XOSC);
+    wait_for_bit(CLOCKS_REGS.clock_ref.selected, 1 << clocks::RefClockSource::XOSC);
+    CLOCKS_REGS.clock_sys.control |= BF(clocks::SysClockControl::SRC, clocks::SysClockSource::Aux);
+    wait_for_bit(CLOCKS_REGS.clock_sys.selected, 1 << clocks::SysClockSource::Aux);
+    // stop rosc
+    ROSC_REGS.control = ROSC_REGS.control & ~rosc::Control::ENABLE | BF(rosc::Control::ENABLE, rosc::ControlEnable::DISABLE);
+    // enable 64-bit timer
+    WATCHDOG_REGS.tick = BF(wd::Tick::CYCLES, 12); // 1us = 12cycles / 12MHz
+    unreset(resets::ResetNum::TIMER);
+}
+
 auto entry() -> void {
     enable_gpio_25();
+    SIO_REGS.gpio_out_set = 1 << 25;
+    init_system();
     while(true) {
         for(auto i = 0; i < 300000; i += 1) {
             SIO_REGS.gpio_out_set = 1 << 25;
