@@ -25,8 +25,8 @@
 #define PSM_BASE                 0x4001'0000 // psm.hpp
 #define IO_BANK0_BASE            0x4001'4000 // io-bank0.hpp
 #define IO_QSPI_BASE             0x4001'8000 // io-qspi.hpp
-#define PADS_BANK0_BASE          0x4001'c000 // TODO
-#define PADS_QSPI_BASE           0x4002'0000 // TODO
+#define PADS_BANK0_BASE          0x4001'c000 // pads.hpp
+#define PADS_QSPI_BASE           0x4002'0000 // pads.hpp
 #define XOSC_BASE                0x4002'4000 // xosc.hpp
 #define PLL_SYS_BASE             0x4002'8000 // pll.hpp
 #define PLL_USB_BASE             0x4002'c000 // pll.hpp
