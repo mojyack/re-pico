@@ -57,7 +57,7 @@ auto init_system() -> void {
     // stop rosc
     ROSC_REGS.control = ROSC_REGS.control & ~rosc::Control::ENABLE | BF(rosc::Control::ENABLE, rosc::ControlEnable::DISABLE);
     // enable 64-bit timer
-    WATCHDOG_REGS.tick |= BF(wd::Tick::CYCLES, 12); // 1us = 12cycles / 12MHz
+    WATCHDOG_REGS.tick |= BF(wd::Tick::Cycles, 12); // 1us = 12cycles / 12MHz
     unreset(resets::ResetNum::Timer);
 }
 
