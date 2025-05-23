@@ -48,9 +48,9 @@ auto init_system() -> void {
     PLL_SYS_REGS.primary = BF(pll::Primary::POSTDIV1, 6) | BF(pll::Primary::POSTDIV2, 2); // 1.2GHz / 6 / 2 = 100MHz
     PLL_SYS_REGS.power_down &= ~(BF(pll::PowerDown::POSTDIVPD, 1));
     // setup clock generators
-    CLOCKS_REGS.clock_ref.control |= BF(clocks::RefClockControl::SRC, clocks::RefClockSource::XOSC);
+    CLOCKS_REGS.clock_ref.control |= BF(clocks::RefClockControl::Source, clocks::RefClockSource::XOSC);
     wait_for_bit(CLOCKS_REGS.clock_ref.selected, 1 << clocks::RefClockSource::XOSC);
-    CLOCKS_REGS.clock_sys.control |= BF(clocks::SysClockControl::SRC, clocks::SysClockSource::Aux);
+    CLOCKS_REGS.clock_sys.control |= BF(clocks::SysClockControl::Source, clocks::SysClockSource::Aux);
     wait_for_bit(CLOCKS_REGS.clock_sys.selected, 1 << clocks::SysClockSource::Aux);
     // stop rosc
     ROSC_REGS.control = ROSC_REGS.control & ~rosc::Control::ENABLE | BF(rosc::Control::ENABLE, rosc::ControlEnable::DISABLE);
