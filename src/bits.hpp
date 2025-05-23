@@ -15,7 +15,7 @@ constexpr auto lsb = lsb_func<num, 0>();
 } // namespace bits
 
 // num to bitfield
-#define BF(field, value) (value << bits::lsb<field>)
+#define BF(field, value) ((value) << bits::lsb<field>)
 
 // bitfield to num
 #define FB(field, value) ((value & field) >> bits::lsb<field>)

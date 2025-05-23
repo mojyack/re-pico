@@ -6,6 +6,7 @@
 #include "rosc.hpp"
 #include "sio.hpp"
 #include "timer.hpp"
+#include "uart.hpp"
 #include "wd.hpp"
 #include "xosc.hpp"
 
@@ -71,6 +72,28 @@ auto usleep(u64 us) -> void {
     }
 }
 
+struct Div {
+    u32 i;
+    u32 f;
+};
+
+constexpr auto calc_baud_rate_divisor(u32 clk_peri, u32 baud) -> Div {
+    // const auto div = 1. * clk_peri / (baud * (1 << 4));
+    // return {u32(div), u32(div * 64 + 0.5)};
+    const auto div = (1 << 3) * clk_peri / baud + 1;
+    return {div >> 7, (div & 0b1111111) >> 1};
+}
+
+auto print(const char* str) -> void {
+    while(*str != '\0') {
+        while(UART0_REGS.flag & uart::Flag::TXFIFOFull) {
+        }
+        UART0_REGS.data = *str;
+        str += 1;
+        SIO_REGS.gpio_out_xor = 1 << 25;
+    }
+}
+
 auto entry() -> void {
     for(auto i = u32(0); i < &bss_end - &bss_start; i += 1) {
         (&bss_start)[i] = 0;
@@ -80,6 +103,20 @@ auto entry() -> void {
     }
     enable_gpio_25();
     init_system();
+
+    // setup uart
+    IO_BANK0_REGS.status_control[0].control = BF(iobank0::GPIOControl::FuncSelect, iobank0::GPIOControlFuncSelect::UART);
+    IO_BANK0_REGS.status_control[1].control = BF(iobank0::GPIOControl::FuncSelect, iobank0::GPIOControlFuncSelect::UART);
+    CLOCKS_REGS_SET.clock_peri.control      = BF(clocks::PeriClockControl::Enable, 1);
+    unreset(resets::ResetNum::UART0);
+    constexpr auto div              = calc_baud_rate_divisor(100 * 1000 * 1000 /*clk_peri = clk_sys = 100MHz*/, 115200);
+    UART0_REGS.integer_baud_rate    = div.i;
+    UART0_REGS.fractional_baud_rate = div.f;
+    UART0_REGS.line_control =
+        BF(uart::LineControl::WordLength, 8 - 5) |
+        BF(uart::LineControl::EnableFIFO, 1);
+    UART0_REGS_SET.control = BF(uart::Control::EnableUART, 1); // TX and RX are default enabled
+
     while(true) {
         // auto s = 400000;
         // for(auto i = 0; i < s; i += 1) {
@@ -89,7 +126,8 @@ auto entry() -> void {
         //     SIO_REGS.gpio_out_clr = 1 << 25;
         // }
         // continue;
-        SIO_REGS.gpio_out_xor = 1 << 25;
+        print("hello\r\n");
+        // SIO_REGS.gpio_out_xor = 1 << 25;
         usleep(50000);
     }
 }
