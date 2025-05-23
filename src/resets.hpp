@@ -40,4 +40,7 @@ struct Regs {
 };
 } // namespace resets
 
-#define RESETS_REGS (*(resets::Regs*)(RESETS_BASE))
+#define RESETS_REGS       (*(resets::Regs*)(RESETS_BASE + 0x0000))
+#define RESETS_REGS_XOR   (*(resets::Regs*)(RESETS_BASE + 0x1000))
+#define RESETS_REGS_SET   (*(resets::Regs*)(RESETS_BASE + 0x2000))
+#define RESETS_REGS_CLEAR (*(resets::Regs*)(RESETS_BASE + 0x3000))

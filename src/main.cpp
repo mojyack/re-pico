@@ -24,14 +24,14 @@ auto wait_for_bit(cv32& reg, const u32 mask) -> void {
 }
 
 auto unreset(const u32 reset_num) -> void {
-    RESETS_REGS.reset &= ~reset_num;
+    RESETS_REGS_CLEAR.reset = reset_num;
     wait_for_bit(RESETS_REGS.reset_done, reset_num);
 }
 
 auto enable_gpio_25() -> void {
     unreset(resets::ResetNum::IOBank0);
 
-    IOBANK0_REGS.status_control[25].control = BF(iobank0::GPIOControl::FuncSelect, iobank0::GPIOControlFuncSelect::SIO);
+    IO_BANK0_REGS.status_control[25].control = BF(iobank0::GPIOControl::FuncSelect, iobank0::GPIOControlFuncSelect::SIO);
 
     SIO_REGS.gpio_out_en_set = 1 << 25;
 }
@@ -44,20 +44,20 @@ auto init_system() -> void {
     wait_for_bit(XOSC_REGS.status, xosc::Status::Stable);
     // enable system pll
     unreset(resets::ResetNum::PLLSys);
-    PLL_SYS_REGS.feedback_div = 100; // VCO clock = 12MHz * 100 = 1.2GHz
-    PLL_SYS_REGS.power_down &= ~(BF(pll::PowerDown::Core, 1) | BF(pll::PowerDown::VCO, 1));
+    PLL_SYS_REGS.feedback_div     = 100; // VCO clock = 12MHz * 100 = 1.2GHz
+    PLL_SYS_REGS_CLEAR.power_down = BF(pll::PowerDown::Core, 1) | BF(pll::PowerDown::VCO, 1);
     wait_for_bit(PLL_SYS_REGS.control_and_status, pll::ControlAndStatus::Lock);
-    PLL_SYS_REGS.primary = BF(pll::Primary::Postdiv1, 6) | BF(pll::Primary::Postdiv2, 2); // 1.2GHz / 6 / 2 = 100MHz
-    PLL_SYS_REGS.power_down &= ~(BF(pll::PowerDown::Postdiv, 1));
+    PLL_SYS_REGS.primary          = BF(pll::Primary::Postdiv1, 6) | BF(pll::Primary::Postdiv2, 2); // 1.2GHz / 6 / 2 = 100MHz
+    PLL_SYS_REGS_CLEAR.power_down = BF(pll::PowerDown::Postdiv, 1);
     // setup clock generators
-    CLOCKS_REGS.clock_ref.control |= BF(clocks::RefClockControl::Source, clocks::RefClockSource::XOSC);
+    CLOCKS_REGS_SET.clock_ref.control = BF(clocks::RefClockControl::Source, clocks::RefClockSource::XOSC);
     wait_for_bit(CLOCKS_REGS.clock_ref.selected, 1 << clocks::RefClockSource::XOSC);
-    CLOCKS_REGS.clock_sys.control |= BF(clocks::SysClockControl::Source, clocks::SysClockSource::Aux);
+    CLOCKS_REGS_SET.clock_sys.control = BF(clocks::SysClockControl::Source, clocks::SysClockSource::Aux);
     wait_for_bit(CLOCKS_REGS.clock_sys.selected, 1 << clocks::SysClockSource::Aux);
     // stop rosc
-    ROSC_REGS.control = ROSC_REGS.control & ~rosc::Control::Enable | BF(rosc::Control::Enable, rosc::ControlEnable::Disable);
+    ROSC_REGS_SET.control = BF(rosc::Control::Enable, rosc::ControlEnable::Disable);
     // enable 64-bit timer
-    WATCHDOG_REGS.tick |= BF(wd::Tick::Cycles, 12); // 1us = 12cycles / 12MHz
+    WATCHDOG_REGS_SET.tick = BF(wd::Tick::Cycles, 12); // 1us = 12cycles / 12MHz
     unreset(resets::ResetNum::Timer);
 }
 

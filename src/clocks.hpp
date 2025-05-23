@@ -321,4 +321,7 @@ struct Regs {
 };
 } // namespace clocks
 
-#define CLOCKS_REGS (*(clocks::Regs*)(CLOCKS_BASE))
+#define CLOCKS_REGS       (*(clocks::Regs*)(CLOCKS_BASE + 0x0000))
+#define CLOCKS_REGS_XOR   (*(clocks::Regs*)(CLOCKS_BASE + 0x1000))
+#define CLOCKS_REGS_SET   (*(clocks::Regs*)(CLOCKS_BASE + 0x2000))
+#define CLOCKS_REGS_CLEAR (*(clocks::Regs*)(CLOCKS_BASE + 0x3000))

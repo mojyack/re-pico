@@ -26,4 +26,7 @@ struct Regs {
 };
 } // namespace sysinfo
 
-#define SYSINFO_REGS (*(sysinfo::Regs*)(SYSINFO_BASE))
+#define SYSINFO_REGS       (*(sysnifo::Regs*)(SYSINFO_BASE + 0x0000))
+#define SYSINFO_REGS_XOR   (*(sysnifo::Regs*)(SYSINFO_BASE + 0x1000))
+#define SYSINFO_REGS_SET   (*(sysnifo::Regs*)(SYSINFO_BASE + 0x2000))
+#define SYSINFO_REGS_CLEAR (*(sysnifo::Regs*)(SYSINFO_BASE + 0x3000))

@@ -39,4 +39,7 @@ struct Regs {
 };
 } // namespace wd
 
-#define WATCHDOG_REGS (*(wd::Regs*)(WATCHDOG_BASE))
+#define WATCHDOG_REGS       (*(wd::Regs*)(WATCHDOG_BASE + 0x0000))
+#define WATCHDOG_REGS_XOR   (*(wd::Regs*)(WATCHDOG_BASE + 0x1000))
+#define WATCHDOG_REGS_SET   (*(wd::Regs*)(WATCHDOG_BASE + 0x2000))
+#define WATCHDOG_REGS_CLEAR (*(wd::Regs*)(WATCHDOG_BASE + 0x3000))

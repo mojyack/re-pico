@@ -35,5 +35,11 @@ struct Regs {
 };
 } // namespace pll
 
-#define PLL_SYS_REGS (*(pll::Regs*)(PLL_SYS_BASE))
-#define PLL_USB_REGS (*(pll::Regs*)(PLL_USB_BASE))
+#define PLL_SYS_REGS       (*(pll::Regs*)(PLL_SYS_BASE + 0x0000))
+#define PLL_SYS_REGS_XOR   (*(pll::Regs*)(PLL_SYS_BASE + 0x1000))
+#define PLL_SYS_REGS_SET   (*(pll::Regs*)(PLL_SYS_BASE + 0x2000))
+#define PLL_SYS_REGS_CLEAR (*(pll::Regs*)(PLL_SYS_BASE + 0x3000))
+#define PLL_USB_REGS       (*(pll::Regs*)(PLL_USB_BASE + 0x0000))
+#define PLL_USB_REGS_XOR   (*(pll::Regs*)(PLL_USB_BASE + 0x1000))
+#define PLL_USB_REGS_SET   (*(pll::Regs*)(PLL_USB_BASE + 0x2000))
+#define PLL_USB_REGS_CLEAR (*(pll::Regs*)(PLL_USB_BASE + 0x3000))

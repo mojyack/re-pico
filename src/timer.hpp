@@ -28,4 +28,7 @@ struct Regs {
 };
 } // namespace timer
 
-#define TIMER_REGS (*(timer::Regs*)(TIMER_BASE))
+#define TIMER_REGS       (*(timer::Regs*)(TIMER_BASE + 0x0000))
+#define TIMER_REGS_XOR   (*(timer::Regs*)(TIMER_BASE + 0x1000))
+#define TIMER_REGS_SET   (*(timer::Regs*)(TIMER_BASE + 0x2000))
+#define TIMER_REGS_CLEAR (*(timer::Regs*)(TIMER_BASE + 0x3000))

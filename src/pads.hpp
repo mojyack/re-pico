@@ -48,5 +48,11 @@ struct QSPIRegs {
 };
 } // namespace pads
 
-#define PADS_BANK0_REGS (*(pads::Bank0Regs*)(PADS_BANK0_BASE))
-#define PADS_QSPI_REGS  (*(pads::QSPIRegs*)(PADS_QSPI_BASE))
+#define PADS_BANK0_REGS       (*(pads::Bank0Regs*)(PADS_BANK0_BASE + 0x0000))
+#define PADS_BANK0_REGS_XOR   (*(pads::Bank0Regs*)(PADS_BANK0_BASE + 0x1000))
+#define PADS_BANK0_REGS_SET   (*(pads::Bank0Regs*)(PADS_BANK0_BASE + 0x2000))
+#define PADS_BANK0_REGS_CLEAR (*(pads::Bank0Regs*)(PADS_BANK0_BASE + 0x3000))
+#define PADS_QSPI_REGS        (*(pads::QSPIRegs*)(PADS_QSPI_BASE + 0x0000))
+#define PADS_QSPI_REGS_XOR    (*(pads::QSPIRegs*)(PADS_QSPI_BASE + 0x1000))
+#define PADS_QSPI_REGS_SET    (*(pads::QSPIRegs*)(PADS_QSPI_BASE + 0x2000))
+#define PADS_QSPI_REGS_CLEAR  (*(pads::QSPIRegs*)(PADS_QSPI_BASE + 0x3000))

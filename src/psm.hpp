@@ -33,4 +33,7 @@ struct Regs {
 };
 } // namespace psm
 
-#define PSM_REGS (*(psm::Regs*)(PSM_BASE))
+#define PSM_REGS       (*(psm::Regs*)(PSM_BASE + 0x0000))
+#define PSM_REGS_XOR   (*(psm::Regs*)(PSM_BASE + 0x1000))
+#define PSM_REGS_SET   (*(psm::Regs*)(PSM_BASE + 0x2000))
+#define PSM_REGS_CLEAR (*(psm::Regs*)(PSM_BASE + 0x3000))

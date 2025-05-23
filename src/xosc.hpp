@@ -58,4 +58,7 @@ struct Regs {
 };
 } // namespace xosc
 
-#define XOSC_REGS (*(xosc::Regs*)(XOSC_BASE))
+#define XOSC_REGS       (*(xosc::Regs*)(XOSC_BASE + 0x0000))
+#define XOSC_REGS_XOR   (*(xosc::Regs*)(XOSC_BASE + 0x1000))
+#define XOSC_REGS_SET   (*(xosc::Regs*)(XOSC_BASE + 0x2000))
+#define XOSC_REGS_CLEAR (*(xosc::Regs*)(XOSC_BASE + 0x3000))

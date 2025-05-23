@@ -104,4 +104,7 @@ struct Regs {
 };
 } // namespace rosc
 
-#define ROSC_REGS (*(rosc::Regs*)(ROSC_BASE))
+#define ROSC_REGS       (*(rosc::Regs*)(ROSC_BASE + 0x0000))
+#define ROSC_REGS_XOR   (*(rosc::Regs*)(ROSC_BASE + 0x1000))
+#define ROSC_REGS_SET   (*(rosc::Regs*)(ROSC_BASE + 0x2000))
+#define ROSC_REGS_CLEAR (*(rosc::Regs*)(ROSC_BASE + 0x3000))

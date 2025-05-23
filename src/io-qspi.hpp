@@ -72,4 +72,7 @@ inline auto write_int_flag(const u8 gpio, v32& field, const InterruptFlags flags
 }
 } // namespace ioqspi
 
-#define IOQSPI_REGS (*(ioqspi::Regs*)(IO_QSPI_BASE))
+#define IO_QSPI_REGS       (*(ioqspi::Regs*)(IO_QSPI_BASE + 0x0000))
+#define IO_QSPI_REGS_XOR   (*(ioqspi::Regs*)(IO_QSPI_BASE + 0x1000))
+#define IO_QSPI_REGS_SET   (*(ioqspi::Regs*)(IO_QSPI_BASE + 0x2000))
+#define IO_QSPI_REGS_CLEAR (*(ioqspi::Regs*)(IO_QSPI_BASE + 0x3000))

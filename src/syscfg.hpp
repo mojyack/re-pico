@@ -49,4 +49,7 @@ struct Regs {
 };
 } // namespace syscfg
 
-#define SYSCFG_REGS (*(syscfg::Regs*)(SYSCFG_BASE))
+#define SYSCFG_REGS       (*(syscfg::Regs*)(SYSCFG_BASE + 0x0000))
+#define SYSCFG_REGS_XOR   (*(syscfg::Regs*)(SYSCFG_BASE + 0x1000))
+#define SYSCFG_REGS_SET   (*(syscfg::Regs*)(SYSCFG_BASE + 0x2000))
+#define SYSCFG_REGS_CLEAR (*(syscfg::Regs*)(SYSCFG_BASE + 0x3000))

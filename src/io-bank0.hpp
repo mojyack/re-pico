@@ -76,4 +76,7 @@ inline auto write_int_flag(const u8 gpio, v32 (&arr)[4], const InterruptFlags fl
 }
 } // namespace iobank0
 
-#define IOBANK0_REGS (*(iobank0::Regs*)(IO_BANK0_BASE))
+#define IO_BANK0_REGS       (*(iobank0::Regs*)(IO_BANK0_BASE + 0x0000))
+#define IO_BANK0_REGS_XOR   (*(iobank0::Regs*)(IO_BANK0_BASE + 0x1000))
+#define IO_BANK0_REGS_SET   (*(iobank0::Regs*)(IO_BANK0_BASE + 0x2000))
+#define IO_BANK0_REGS_CLEAR (*(iobank0::Regs*)(IO_BANK0_BASE + 0x3000))
