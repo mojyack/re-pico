@@ -33,7 +33,7 @@ auto enable_gpio_25() -> void {
 
     IOBANK0_REGS.status_control[25].control = BF(iobank0::GPIOControl::FuncSelect, iobank0::GPIOControlFuncSelect::SIO);
 
-    SIO_REGS.gpio_oe_set = 1 << 25;
+    SIO_REGS.gpio_out_en_set = 1 << 25;
 }
 
 auto init_system() -> void {
@@ -55,7 +55,7 @@ auto init_system() -> void {
     CLOCKS_REGS.clock_sys.control |= BF(clocks::SysClockControl::Source, clocks::SysClockSource::Aux);
     wait_for_bit(CLOCKS_REGS.clock_sys.selected, 1 << clocks::SysClockSource::Aux);
     // stop rosc
-    ROSC_REGS.control = ROSC_REGS.control & ~rosc::Control::ENABLE | BF(rosc::Control::ENABLE, rosc::ControlEnable::DISABLE);
+    ROSC_REGS.control = ROSC_REGS.control & ~rosc::Control::Enable | BF(rosc::Control::Enable, rosc::ControlEnable::Disable);
     // enable 64-bit timer
     WATCHDOG_REGS.tick |= BF(wd::Tick::Cycles, 12); // 1us = 12cycles / 12MHz
     unreset(resets::ResetNum::Timer);
@@ -103,7 +103,7 @@ extern "C" {
             SIO_REGS.gpio_out_set = 1 << 25;
         }
         for(auto i = 0; i < 50000; i += 1) {
-            SIO_REGS.gpio_out_clr = 1 << 25;
+            SIO_REGS.gpio_out_clear = 1 << 25;
         }
     }
 }

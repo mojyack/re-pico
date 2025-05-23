@@ -5,34 +5,34 @@
 namespace sio {
 struct FIFOStatus {
     enum : u32 {
-        VLD = 0b0000,
-        RDY = 0b0010,
-        WOF = 0b0100,
-        ROE = 0b1000,
+        Valid         = 0b0000'0000'0000'0000'0000'0000'0000'0001,
+        Ready         = 0b0000'0000'0000'0000'0000'0000'0000'0010,
+        WriteOverflow = 0b0000'0000'0000'0000'0000'0000'0000'0100,
+        ReadUnderflow = 0b0000'0000'0000'0000'0000'0000'0000'1000,
     };
 };
 
-struct DivControlStatus {
+struct DivControlAndStatus {
     enum : u32 {
-        READY = 0b0000,
-        DIRTY = 0b0010,
+        Ready = 0b0000'0000'0000'0000'0000'0000'0000'0001,
+        Dirty = 0b0000'0000'0000'0000'0000'0000'0000'0010,
     };
 };
 
 struct InterpControl {
     enum : u32 {
-        SHIFT        = 0b0000'0000'0000'0000'0000'0000'0001'1111,
-        MASK_LSB     = 0b0000'0000'0000'0000'0000'0011'1110'0000,
-        MASK_MSB     = 0b0000'0000'0000'0000'0111'1100'0000'0000,
-        SIGNED       = 0b0000'0000'0000'0000'1000'0000'0000'0000,
-        CROSS_INPUT  = 0b0000'0000'0000'0001'0000'0000'0000'0000,
-        CROSS_RESULT = 0b0000'0000'0000'0010'0000'0000'0000'0000,
-        ADD_RAW      = 0b0000'0000'0000'0100'0000'0000'0000'0000,
-        FORCE_MSB    = 0b0000'0000'0001'1000'0000'0000'0000'0000,
-        BLEND        = 0b0000'0000'0010'0000'0000'0000'0000'0000, // lane0 only
-        OVERF0       = 0b0000'0000'1000'0000'0000'0000'0000'0000, // lane0 only
-        OVERF1       = 0b0000'0001'0000'0000'0000'0000'0000'0000, // lane0 only
-        OVERF        = 0b0000'0010'0000'0000'0000'0000'0000'0000, // lane0 only
+        Shift       = 0b0000'0000'0000'0000'0000'0000'0001'1111,
+        MaskLSB     = 0b0000'0000'0000'0000'0000'0011'1110'0000,
+        MaskMSB     = 0b0000'0000'0000'0000'0111'1100'0000'0000,
+        Signed      = 0b0000'0000'0000'0000'1000'0000'0000'0000,
+        CrossInput  = 0b0000'0000'0000'0001'0000'0000'0000'0000,
+        CrossResult = 0b0000'0000'0000'0010'0000'0000'0000'0000,
+        AddRaw      = 0b0000'0000'0000'0100'0000'0000'0000'0000,
+        ForceMSB    = 0b0000'0000'0001'1000'0000'0000'0000'0000,
+        Blend       = 0b0000'0000'0010'0000'0000'0000'0000'0000, // lane0 only
+        Overflow0   = 0b0000'0000'1000'0000'0000'0000'0000'0000, // lane0 only
+        Overflow1   = 0b0000'0001'0000'0000'0000'0000'0000'0000, // lane0 only
+        Overflow    = 0b0000'0010'0000'0000'0000'0000'0000'0000, // lane0 only
     };
 };
 
@@ -62,31 +62,31 @@ struct Regs {
     cv32         reserved1;
     v32          gpio_out;
     v32          gpio_out_set;
-    v32          gpio_out_clr;
+    v32          gpio_out_clear;
     v32          gpio_out_xor;
-    v32          gpio_oe; // out enable
-    v32          gpio_oe_set;
-    v32          gpio_oe_clr;
-    v32          gpio_oe_xor;
+    v32          gpio_out_en;
+    v32          gpio_out_en_set;
+    v32          gpio_out_en_clear;
+    v32          gpio_out_en_xor;
     v32          gpio_hi_out;
     v32          gpio_hi_out_set;
-    v32          gpio_hi_out_clr;
+    v32          gpio_hi_out_clear;
     v32          gpio_hi_out_xor;
-    v32          gpio_hi_oe;
-    v32          gpio_hi_oe_set;
-    v32          gpio_hi_oe_clr;
-    v32          gpio_hi_oe_xor;
-    v32          fifo_st; // status
-    v32          fifo_wr; // write
-    v32          fifo_rd; //  read
-    cv32         spinlock_st;
+    v32          gpio_hi_out_en;
+    v32          gpio_hi_out_en_set;
+    v32          gpio_hi_out_en_clr;
+    v32          gpio_hi_out_en_xor;
+    v32          fifo_status;
+    v32          fifo_write;
+    v32          fifo_read;
+    cv32         spinlock_status;
     v32          div_udividend;
     v32          div_udivisor;
     v32          div_sdividend;
     v32          div_sdivisor;
     v32          div_quotient;
     v32          div_remainder;
-    cv32         div_csr; // control and status
+    cv32         div_control_and_status;
     cv32         reserved2;
     Interpolator interp0;
     Interpolator interp1;
