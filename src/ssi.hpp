@@ -5,73 +5,73 @@
 namespace ssi {
 struct Control0TransferMode {
     enum : u32 {
-        TX_AND_RX   = 0,
-        TX_ONLY     = 1,
-        RX_ONLY     = 2,
-        EEPROM_READ = 3,
+        TXAndRX    = 0,
+        TXOnly     = 1,
+        RXOnly     = 2,
+        EEPROMRead = 3,
     };
 };
 
 struct Control0SPIFrameFormat {
     enum : u32 {
-        STD  = 0,
-        DUAL = 1,
-        QUAD = 2,
+        Std  = 0,
+        Dual = 1,
+        Quad = 2,
     };
 };
 
 struct Control0 {
     enum : u32 {
-        DFS     = 0b0000'0000'0000'0000'0000'0000'0000'1111, // data frame size
-        FRF     = 0b0000'0000'0000'0000'0000'0000'0011'0000, // frame format
-        SCPH    = 0b0000'0000'0000'0000'0000'0000'0100'0000, // serial clock phase
-        SCPOL   = 0b0000'0000'0000'0000'0000'0000'1000'0000, // serial clock polarity
-        TMOD    = 0b0000'0000'0000'0000'0000'0011'0000'0000, // transfer mode
-        SLV_OE  = 0b0000'0000'0000'0000'0000'0100'0000'0000, // slave output enable
-        SRL     = 0b0000'0000'0000'0000'0000'1000'0000'0000, // shift register loop
-        CFS     = 0b0000'0000'0000'0000'1111'0000'0000'0000, // control frame size
-        DFS_32  = 0b0000'0000'0001'1111'0000'0000'0000'0000, // data frame size in 32b transfer mode
-        SPI_FRF = 0b0000'0000'0110'0000'0000'0000'0000'0000, // spi frame format
-        SSTE    = 0b0000'0001'0000'0000'0000'0000'0000'0000, // slave select toggle enable
+        DataFrameSize           = 0b0000'0000'0000'0000'0000'0000'0000'1111,
+        FrameFormat             = 0b0000'0000'0000'0000'0000'0000'0011'0000,
+        SerialClockPhase        = 0b0000'0000'0000'0000'0000'0000'0100'0000,
+        SerialClockPolarity     = 0b0000'0000'0000'0000'0000'0000'1000'0000,
+        TransferMode            = 0b0000'0000'0000'0000'0000'0011'0000'0000,
+        SlaveOutputEnable       = 0b0000'0000'0000'0000'0000'0100'0000'0000,
+        ShiftRegisterLoop       = 0b0000'0000'0000'0000'0000'1000'0000'0000,
+        ControlFrameSize        = 0b0000'0000'0000'0000'1111'0000'0000'0000,
+        DataFrameSize32         = 0b0000'0000'0001'1111'0000'0000'0000'0000,
+        SPIFrameFormat          = 0b0000'0000'0110'0000'0000'0000'0000'0000,
+        SlaveSelectToggleEnable = 0b0000'0001'0000'0000'0000'0000'0000'0000,
     };
 };
 
 struct MicrowireControl {
     enum : u32 {
-        MWMOD = 0, // microwire transfer mode
-        MDD   = 1, // microwire control
-        MHS   = 2, // microwire handshaking
+        TransferMode = 0,
+        Control      = 1,
+        Handshaking  = 2,
     };
 };
 
 struct Status {
     enum : u32 {
-        BUSY = 0b0000'0000'0000'0000'0000'0000'0000'0001, // ssi busy flag
-        TFNF = 0b0000'0000'0000'0000'0000'0000'0000'0010, // transmit fifo not full
-        TFE  = 0b0000'0000'0000'0000'0000'0000'0000'0100, // transmit fifo empty
-        RFNF = 0b0000'0000'0000'0000'0000'0000'0000'1000, // receive fifo not full
-        RFF  = 0b0000'0000'0000'0000'0000'0000'0001'0000, // receive fifo full
-        TXE  = 0b0000'0000'0000'0000'0000'0000'0010'0000, // transmission error
-        DCOL = 0b0000'0000'0000'0000'0000'0000'0100'0000, // data collision error
+        SSIBusy            = 0b0000'0000'0000'0000'0000'0000'0000'0001, // ssi busy flag
+        TXFIFONotFull      = 0b0000'0000'0000'0000'0000'0000'0000'0010, // transmit fifo not full
+        TXFIFOEmpty        = 0b0000'0000'0000'0000'0000'0000'0000'0100, // transmit fifo empty
+        RXFIFONotFull      = 0b0000'0000'0000'0000'0000'0000'0000'1000, // receive fifo not full
+        RXFIFOFull         = 0b0000'0000'0000'0000'0000'0000'0001'0000, // receive fifo full
+        TXErorr            = 0b0000'0000'0000'0000'0000'0000'0010'0000, // transmission error
+        DataCollisionError = 0b0000'0000'0000'0000'0000'0000'0100'0000, // data collision error
     };
 };
 
 // for interrupt_mask, interrupt_status, raw_intrerrupt_status
 struct Interrupts {
     enum : u32 {
-        TXE = 0b0000'0000'0000'0000'0000'0000'0000'0001, // transmit fifo empty
-        TXO = 0b0000'0000'0000'0000'0000'0000'0000'0010, // transmit fifo overflow
-        RXU = 0b0000'0000'0000'0000'0000'0000'0000'0100, // receive fifo underflow
-        RXO = 0b0000'0000'0000'0000'0000'0000'0000'1000, // receive fifo overflow
-        RXF = 0b0000'0000'0000'0000'0000'0000'0001'0000, // receive fifo full
-        MST = 0b0000'0000'0000'0000'0000'0000'0010'0000, // multi-master contention
+        TXFIFOEmpty           = 0b0000'0000'0000'0000'0000'0000'0000'0001,
+        TXFIFOOverflow        = 0b0000'0000'0000'0000'0000'0000'0000'0010,
+        RXFIFOUnderflow       = 0b0000'0000'0000'0000'0000'0000'0000'0100,
+        RXFIFOOverflow        = 0b0000'0000'0000'0000'0000'0000'0000'1000,
+        RXFIFOFull            = 0b0000'0000'0000'0000'0000'0000'0001'0000,
+        MultiMasterContention = 0b0000'0000'0000'0000'0000'0000'0010'0000,
     };
 };
 
 struct DMAControl {
     enum : u32 {
-        TDMAE = 0b0000'0000'0000'0000'0000'0000'0000'0001,
-        RDMAE = 0b0000'0000'0000'0000'0000'0000'0000'0010,
+        TXDMAEnable = 0b0000'0000'0000'0000'0000'0000'0000'0001,
+        RXDMAEnable = 0b0000'0000'0000'0000'0000'0000'0000'0010,
     };
 };
 
@@ -85,7 +85,7 @@ struct SPIControl0TransType {
 
 struct SPIControl0InstructionLength {
     enum : u32 {
-        _NONE = 0,
+        _None = 0,
         _4B   = 1,
         _8B   = 2,
         _16B  = 3,
@@ -94,14 +94,14 @@ struct SPIControl0InstructionLength {
 
 struct SPIControl0 {
     enum : u32 {
-        TRANS_TYPE  = 0b0000'0000'0000'0000'0000'0000'0000'0011,
-        ADDR_L      = 0b0000'0000'0000'0000'0000'0000'0011'1100,
-        INST_L      = 0b0000'0000'0000'0000'0000'0011'0000'0000,
-        WAIT_CYCLES = 0b0000'0000'0000'0000'1111'1000'0000'0000,
-        SPI_DDR_EN  = 0b0000'0000'0000'0001'0000'0000'0000'0000,
-        INST_DDR_EN = 0b0000'0000'0000'0010'0000'0000'0000'0000,
-        SPI_RXDS_EN = 0b0000'0000'0000'0100'0000'0000'0000'0000,
-        XIP_CMD     = 0b1111'1111'0000'0000'0000'0000'0000'0000,
+        TransType               = 0b0000'0000'0000'0000'0000'0000'0000'0011,
+        AddressLength           = 0b0000'0000'0000'0000'0000'0000'0011'1100,
+        InstructionLength       = 0b0000'0000'0000'0000'0000'0011'0000'0000,
+        WaitCycles              = 0b0000'0000'0000'0000'1111'1000'0000'0000,
+        SPIDDREnable            = 0b0000'0000'0000'0001'0000'0000'0000'0000,
+        InstructionDDREnable    = 0b0000'0000'0000'0010'0000'0000'0000'0000,
+        SPIReadDataStrobeEnable = 0b0000'0000'0000'0100'0000'0000'0000'0000,
+        XIPCommand              = 0b1111'1111'0000'0000'0000'0000'0000'0000,
     };
 };
 

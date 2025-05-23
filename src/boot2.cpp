@@ -12,7 +12,9 @@ auto read_flash_sreg(u8 status_command) -> u8;
 __attribute__((section(".boot2"))) auto boot_stage2() -> void {
     SSI_REGS.ssi_enable = 0;
     SSI_REGS.baud_rate  = 4;
-    SSI_REGS.control0   = BF(ssi::Control0::TMOD, ssi::Control0TransferMode::TX_AND_RX) | BF(ssi::Control0::DFS_32, 7);
+    SSI_REGS.control0 =
+        BF(ssi::Control0::TransferMode, ssi::Control0TransferMode::TXAndRX) |
+        BF(ssi::Control0::DataFrameSize32, 7);
     SSI_REGS.ssi_enable = 1;
 
     const auto st1 = read_flash_sreg(flash::Instructions::ReadStatusRegister1);
@@ -31,14 +33,14 @@ __attribute__((section(".boot2"))) auto boot_stage2() -> void {
     // dummy read
     SSI_REGS.ssi_enable = 0;
     SSI_REGS.control0 =
-        BF(ssi::Control0::TMOD, ssi::Control0TransferMode::EEPROM_READ) |
-        BF(ssi::Control0::DFS_32, 31) |
-        BF(ssi::Control0::SPI_FRF, ssi::Control0SPIFrameFormat::QUAD);
+        BF(ssi::Control0::TransferMode, ssi::Control0TransferMode::EEPROMRead) |
+        BF(ssi::Control0::DataFrameSize32, 31) |
+        BF(ssi::Control0::SPIFrameFormat, ssi::Control0SPIFrameFormat::Quad);
     SSI_REGS.spi_control0 =
-        BF(ssi::SPIControl0::ADDR_L, 8 /*32-bits*/) |
-        BF(ssi::SPIControl0::INST_L, ssi::SPIControl0InstructionLength::_8B) |
-        BF(ssi::SPIControl0::TRANS_TYPE, ssi::SPIControl0TransType::_1C2A) |
-        BF(ssi::SPIControl0::WAIT_CYCLES, 4);
+        BF(ssi::SPIControl0::AddressLength, 8 /*32-bits*/) |
+        BF(ssi::SPIControl0::InstructionLength, ssi::SPIControl0InstructionLength::_8B) |
+        BF(ssi::SPIControl0::TransType, ssi::SPIControl0TransType::_1C2A) |
+        BF(ssi::SPIControl0::WaitCycles, 4);
     SSI_REGS.ssi_enable = 1;
 
     SSI_REGS.data_register[0] = flash::Instructions::FastReadQuadIO;
@@ -48,11 +50,11 @@ __attribute__((section(".boot2"))) auto boot_stage2() -> void {
     // configure
     SSI_REGS.ssi_enable = 0;
     SSI_REGS.spi_control0 =
-        BF(ssi::SPIControl0::XIP_CMD, flash::ReadMode::Continuous) |
-        BF(ssi::SPIControl0::ADDR_L, 8 /*32-bits*/) |
-        BF(ssi::SPIControl0::WAIT_CYCLES, 4) |
-        BF(ssi::SPIControl0::INST_L, ssi::SPIControl0InstructionLength::_NONE) |
-        BF(ssi::SPIControl0::TRANS_TYPE, ssi::SPIControl0TransType::_2C2A);
+        BF(ssi::SPIControl0::XIPCommand, flash::ReadMode::Continuous) |
+        BF(ssi::SPIControl0::AddressLength, 8 /*32-bits*/) |
+        BF(ssi::SPIControl0::WaitCycles, 4) |
+        BF(ssi::SPIControl0::InstructionLength, ssi::SPIControl0InstructionLength::_None) |
+        BF(ssi::SPIControl0::TransType, ssi::SPIControl0TransType::_2C2A);
     SSI_REGS.ssi_enable = 1;
 
     M0PLUS_REGS.vector_table_offset = XIP_BASE + 0x100;                     // set vector table offset
@@ -62,7 +64,7 @@ __attribute__((section(".boot2"))) auto boot_stage2() -> void {
 
 namespace {
 __attribute__((section(".boot2"))) auto wait_and_read(u8 count) -> u32 {
-    while(!(SSI_REGS.status & ssi::Status::TFE) || SSI_REGS.status & ssi::Status::BUSY) {
+    while(!(SSI_REGS.status & ssi::Status::TXFIFOEmpty) || SSI_REGS.status & ssi::Status::SSIBusy) {
     }
     u32 result = 0;
     while(count > 0) {
