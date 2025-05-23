@@ -1,6 +1,6 @@
+#include "bits.hpp"
 #include "clocks.hpp"
 #include "io-bank0.hpp"
-#include "math.hpp"
 #include "pll.hpp"
 #include "resets.hpp"
 #include "rosc.hpp"
@@ -8,8 +8,6 @@
 #include "timer.hpp"
 #include "wd.hpp"
 #include "xosc.hpp"
-
-#define BF(field, value) value << math::log2<field>
 
 // from linker script
 extern u32 stack_top;

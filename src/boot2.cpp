@@ -1,9 +1,7 @@
+#include "bits.hpp"
 #include "m0plus.hpp"
-#include "math.hpp"
 #include "spi-flash/w25q80.hpp"
 #include "ssi.hpp"
-
-#define BF(field, value) value << math::log2<field>
 
 extern "C" {
 namespace {
