@@ -29,7 +29,7 @@ auto unreset(const u32 reset_num) -> void {
 }
 
 auto enable_gpio_25() -> void {
-    unreset(resets::ResetNum::IO_BANK0);
+    unreset(resets::ResetNum::IOBank0);
 
     IOBANK0_REGS.status_control[25].control = iobank0::GPIOControlFuncSel::SIO;
 
@@ -41,7 +41,7 @@ auto init_system() -> void {
     XOSC_REGS.control = BF(xosc::Control::ENABLE, xosc::ControlEnable::ENABLE) | BF(xosc::Control::FREQ_RANGE, xosc::ControlFreqRange::_1p15MHz);
     wait_for_bit(XOSC_REGS.status, xosc::Status::STABLE);
     // enable system pll
-    unreset(resets::ResetNum::PLL_SYS);
+    unreset(resets::ResetNum::PLLSys);
     PLL_SYS_REGS.feedback_div = 100; // VCO clock = 12MHz * 100 = 1.2GHz
     PLL_SYS_REGS.power_down &= ~(BF(pll::PowerDown::PD, 1) | BF(pll::PowerDown::VCOPD, 1));
     wait_for_bit(PLL_SYS_REGS.control_and_status, pll::ControlAndStatus::LOCK);
@@ -56,7 +56,7 @@ auto init_system() -> void {
     ROSC_REGS.control = ROSC_REGS.control & ~rosc::Control::ENABLE | BF(rosc::Control::ENABLE, rosc::ControlEnable::DISABLE);
     // enable 64-bit timer
     WATCHDOG_REGS.tick |= BF(wd::Tick::CYCLES, 12); // 1us = 12cycles / 12MHz
-    unreset(resets::ResetNum::TIMER);
+    unreset(resets::ResetNum::Timer);
 }
 
 auto read_time() -> u64 {
