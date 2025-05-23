@@ -11,6 +11,14 @@
 
 #define BF(field, value) value << math::log2<field>
 
+// from linker script
+extern u32 stack_top;
+extern u32 bss_start;
+extern u32 bss_end;
+extern u32 data_start;
+extern u32 data_end;
+extern u32 data_load;
+
 namespace {
 auto wait_for_bit(cv32& reg, const u32 mask) -> void {
     while(!(reg & mask)) {
@@ -64,10 +72,23 @@ auto usleep(u64 us) -> void {
 }
 
 auto entry() -> void {
+    for(auto i = u32(0); i < &bss_end - &bss_start; i += 1) {
+        (&bss_start)[i] = 0;
+    }
+    for(auto i = u32(0); i < &data_end - &data_start; i += 1) {
+        (&data_start)[i] = (&data_load)[i];
+    }
     enable_gpio_25();
-    SIO_REGS.gpio_out_set = 1 << 25;
     init_system();
     while(true) {
+        // auto s = 400000;
+        // for(auto i = 0; i < s; i += 1) {
+        //     SIO_REGS.gpio_out_set = 1 << 25;
+        // }
+        // for(auto i = 0; i < s; i += 1) {
+        //     SIO_REGS.gpio_out_clr = 1 << 25;
+        // }
+        // continue;
         SIO_REGS.gpio_out_xor = 1 << 25;
         usleep(50000);
     }
@@ -120,8 +141,6 @@ __attribute__((weak, alias("default_int_handler"))) auto adc_irq_fifo_handler() 
 __attribute__((weak, alias("default_int_handler"))) auto i2c_0_irq_handler() -> void;
 __attribute__((weak, alias("default_int_handler"))) auto i2c_1_irq_handler() -> void;
 __attribute__((weak, alias("default_int_handler"))) auto rtc_irq_handler() -> void;
-
-extern u32 stack_top;
 
 __attribute__((section(".vector"))) void* vector[48] = {
     // internal

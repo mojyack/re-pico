@@ -17,12 +17,26 @@ SECTIONS {
         *(.text*)
     } > flash
 
-    .ARM.exidx : {
-        *(.ARM.exidx*)
-    } > flash
+    .bss : {
+        *(.bss*)
+    } > sram
+
+    .data : {
+        *(.data*)
+    } > sram AT > flash
 
     .stack (NOLOAD) : {
         . = ORIGIN(sram) + LENGTH(sram);
         stack_top = .; 
     } > sram
+
+    bss_start = ADDR(.bss);
+    bss_end = data_start + SIZEOF(.bss);
+    data_start = ADDR(.data);
+    data_end = data_start + SIZEOF(.data);
+    data_load = LOADADDR(.data);
+
+    /DISCARD/ : {
+        *(.ARM.exidx*)
+    }
 }
