@@ -1,5 +1,5 @@
 #pragma once
-#define ROM_BASE                 0x0000'0000
+#define ROM_BASE                 0x0000'0000 // rom.hpp
 #define XIP_BASE                 0x1000'0000
 #define XIP_NOALLOC_BASE         0x1100'0000
 #define XIP_NOCACHE_BASE         0x1200'0000

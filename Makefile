@@ -17,7 +17,7 @@ clean:
 build:
 	mkdir $@
 
-build/firmware.elf: src/link.ld build/boot2.o build/main.o
+build/firmware.elf: src/link.ld build/boot2.o build/main.o build/rom.o
 	$(LD) $(LDFLAGS) -T $^ -o $@
 
 build/firmware.bin: build/firmware.elf

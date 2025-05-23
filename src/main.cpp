@@ -3,6 +3,7 @@
 #include "io-bank0.hpp"
 #include "pll.hpp"
 #include "resets.hpp"
+#include "rom.hpp"
 #include "rosc.hpp"
 #include "sio.hpp"
 #include "timer.hpp"
@@ -94,12 +95,18 @@ auto print(const char* str) -> void {
     }
 }
 
+auto num = int();
+
 auto entry() -> void {
     for(auto i = u32(0); i < &bss_end - &bss_start; i += 1) {
         (&bss_start)[i] = 0;
     }
     for(auto i = u32(0); i < &data_end - &data_start; i += 1) {
         (&data_start)[i] = (&data_load)[i];
+    }
+    rom::fops = (rom::FOps*)rom::lookup_data(rom::code::soft_float_table);
+    if(ROM.version >= 2) {
+        rom::dops = (rom::DOps*)rom::lookup_data(rom::code::soft_double_table);
     }
     enable_gpio_25();
     init_system();
@@ -126,9 +133,25 @@ auto entry() -> void {
         //     SIO_REGS.gpio_out_clr = 1 << 25;
         // }
         // continue;
-        print("hello\r\n");
+        print((char*)rom::lookup_data(rom::code::copyright_string));
+        print("\r\n");
+        char version[] = "version0";
+        version[7] += ROM.version;
+        print(version);
+        print("\r\n");
+        char popcount[] = "popcount0";
+        popcount[8] += num;
+        num += rom::fops->float2int(rom::fops->fadd(0.5, 0.5));
+        print(popcount);
+        print("\r\n");
         // SIO_REGS.gpio_out_xor = 1 << 25;
         usleep(50000);
+        if(!(UART0_REGS.flag & uart::Flag::RXFIFOEmpty)) {
+            auto c = u8(UART0_REGS.data);
+            if(c == 'x') {
+                ((rom::reset_to_usb_boot*)rom::lookup_func(rom::code::reset_to_usb_boot))(0, 0);
+            }
+        }
     }
 }
 } // namespace
