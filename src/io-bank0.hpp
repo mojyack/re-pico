@@ -1,25 +1,14 @@
 #pragma once
 #include "address-map.hpp"
 #include "int.hpp"
+#include "io-common.hpp"
 
 namespace iobank0 {
-struct GPIOStatus {
-    enum : u32 {
-        OUTFROMPERI = 0b0000'0000'0000'0000'0000'0001'0000'0000,
-        OUTTOPAD    = 0b0000'0000'0000'0000'0000'0010'0000'0000,
-        OEFROMPERI  = 0b0000'0000'0000'0000'0001'0000'0000'0000,
-        OETOPAD     = 0b0000'0000'0000'0000'0010'0000'0000'0000,
-        INFROMPAD   = 0b0000'0000'0000'0010'0000'0000'0000'0000,
-        INTOPERI    = 0b0000'0000'0000'1000'0000'0000'0000'0000,
-        IRQFROMPAD  = 0b0000'0001'0000'0000'0000'0000'0000'0000,
-        IRQTOPROC   = 0b0000'0100'0000'0000'0000'0000'0000'0000,
-    };
-};
+using GPIOStatus = ::iocommon::GPIOStatus;
 
 // control
 struct GPIOControlFuncSel {
     enum : u32 {
-        XIP  = 0b0000'0000'0000'0000'0000'0000'0000'0000,
         SPI  = 0b0000'0000'0000'0000'0000'0000'0000'0001,
         UART = 0b0000'0000'0000'0000'0000'0000'0000'0010,
         I2C  = 0b0000'0000'0000'0000'0000'0000'0000'0011,
@@ -33,51 +22,11 @@ struct GPIOControlFuncSel {
     };
 };
 
-struct GPIOControlOutOver {
-    enum : u32 {
-        NORMAL = 0b0000'0000'0000'0000'0000'0000'0000'0000,
-        INVERT = 0b0000'0000'0000'0000'0000'0001'0000'0000,
-        LOW    = 0b0000'0000'0000'0000'0000'0010'0000'0000,
-        HIGH   = 0b0000'0000'0000'0000'0000'0011'0000'0000,
-    };
-};
+using GPIOControlOutOver = ::iocommon::GPIOControlOutOver;
 
-struct GPIOControlOutEnOver {
-    enum : u32 {
-        NORMAL  = 0b0000'0000'0000'0000'0000'0000'0000'0000,
-        INVERT  = 0b0000'0000'0000'0000'0001'0000'0000'0000,
-        DISABLE = 0b0000'0000'0000'0000'0010'0000'0000'0000,
-        ENABLE  = 0b0000'0000'0000'0000'0011'0000'0000'0000,
-    };
-};
+using GPIOControlOutEnOver = ::iocommon::GPIOControlOutEnOver;
 
-struct GPIOControlInOver {
-    enum : u32 {
-        NORMAL = 0b0000'0000'0000'0000'0000'0000'0000'0000,
-        INVERT = 0b0000'0000'0000'0001'0000'0000'0000'0000,
-        LOW    = 0b0000'0000'0000'0010'0000'0000'0000'0000,
-        HIGH   = 0b0000'0000'0000'0011'0000'0000'0000'0000,
-    };
-};
-
-struct GPIOControlIrqOver {
-    enum : u32 {
-        NORMAL = 0b0000'0000'0000'0000'0000'0000'0000'0000,
-        INVERT = 0b0001'0000'0000'0000'0000'0000'0000'0000,
-        LOW    = 0b0010'0000'0000'0000'0000'0000'0000'0000,
-        HIGH   = 0b0011'0000'0000'0000'0000'0000'0000'0000,
-    };
-};
-
-struct GPIOControlMask {
-    enum : u32 {
-        FUNCSEL = 0b0000'0000'0000'0000'0000'0000'0001'1111,
-        OUTOVER = 0b0000'0000'0000'0000'0000'0011'0000'0000,
-        OEOVER  = 0b0000'0000'0000'0000'0011'0000'0000'0000,
-        INOVER  = 0b0000'0000'0000'0011'0000'0000'0000'0000,
-        IRQOVER = 0b0011'0000'0000'0000'0000'0000'0000'0000,
-    };
-};
+using GPIOControlInOver = ::iocommon::GPIOControlInOver;
 // ~control
 
 struct IRQControl {

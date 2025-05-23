@@ -18,13 +18,13 @@
 #define SRAM1_BASE               0x2101'0000
 #define SRAM2_BASE               0x2102'0000
 #define SRAM3_BASE               0x2103'0000
-#define SYSINFO_BASE             0x4000'0000 // TODO
-#define SYSCFG_BASE              0x4000'4000 // TODO
+#define SYSINFO_BASE             0x4000'0000 // sysinfo.hpp
+#define SYSCFG_BASE              0x4000'4000 // syscfg.hpp
 #define CLOCKS_BASE              0x4000'8000 // clocks.hpp
 #define RESETS_BASE              0x4000'c000 // resets.hpp
-#define PSM_BASE                 0x4001'0000 // TODO
+#define PSM_BASE                 0x4001'0000 // psm.hpp
 #define IO_BANK0_BASE            0x4001'4000 // io-bank0.hpp
-#define IO_QSPI_BASE             0x4001'8000 // TODO
+#define IO_QSPI_BASE             0x4001'8000 // WIP io-qspi.hpp
 #define PADS_BANK0_BASE          0x4001'c000 // TODO
 #define PADS_QSPI_BASE           0x4002'0000 // TODO
 #define XOSC_BASE                0x4002'4000 // xosc.hpp
