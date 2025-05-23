@@ -9,17 +9,19 @@ using GPIOStatus = ::iocommon::GPIOStatus;
 // control
 struct GPIOControlFuncSel {
     enum : u32 {
-        XIP  = 0b0000'0000'0000'0000'0000'0000'0000'0000,
-        SIO  = 0b0000'0000'0000'0000'0000'0000'0000'0101,
-        NULL = 0b0000'0000'0000'0000'0000'0000'0001'1111,
+        XIP  = 0,
+        SIO  = 5,
+        Null = 31,
     };
 };
 
-using GPIOControlOutOver = ::iocommon::GPIOControlOutOver;
+using GPIOControlOutOverride = ::iocommon::GPIOControlOutOverride;
 
-using GPIOControlOutEnOver = ::iocommon::GPIOControlOutEnOver;
+using GPIOControlOutEnOverride = ::iocommon::GPIOControlOutEnOverride;
 
-using GPIOControlInOver = ::iocommon::GPIOControlInOver;
+using GPIOControlInOverride = ::iocommon::GPIOControlInOverride;
+
+using GPIOControl = ::iocommon::GPIOControl;
 
 struct IRQControl {
     v32  enable;
@@ -41,6 +43,33 @@ struct Regs {
     IRQControl    proc1_irq_control;
     IRQControl    dormant_wake_irq_control;
 };
+
+// helpers
+struct InterruptFlags {
+    bool edge_high;
+    bool edge_low;
+    bool level_hight;
+    bool level_low;
+};
+
+inline auto read_int_flag(const u8 gpio, const v32& field) -> InterruptFlags {
+    const auto shift = gpio % 8 * 4;
+    const auto num   = field >> shift;
+    return InterruptFlags{
+        bool(num & 0b1000),
+        bool(num & 0b0100),
+        bool(num & 0b0010),
+        bool(num & 0b0001),
+    };
+}
+
+inline auto write_int_flag(const u8 gpio, v32& field, const InterruptFlags flags) -> void {
+    const auto shift = gpio % 8 * 4;
+    auto       num   = field;
+    num &= ~(0b1111 << shift);
+    num |= (flags.edge_high << 3 | flags.edge_low << 2 | flags.level_hight << 1 | flags.level_low << 0) << shift;
+    field = num;
+}
 } // namespace ioqspi
 
 #define IOQSPI_REGS (*(ioqspi::Regs*)(IO_QSPI_BASE))

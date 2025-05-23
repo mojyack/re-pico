@@ -7,26 +7,28 @@ namespace iobank0 {
 using GPIOStatus = ::iocommon::GPIOStatus;
 
 // control
-struct GPIOControlFuncSel {
+struct GPIOControlFuncSelect {
     enum : u32 {
-        SPI  = 0b0000'0000'0000'0000'0000'0000'0000'0001,
-        UART = 0b0000'0000'0000'0000'0000'0000'0000'0010,
-        I2C  = 0b0000'0000'0000'0000'0000'0000'0000'0011,
-        PWM  = 0b0000'0000'0000'0000'0000'0000'0000'0100,
-        SIO  = 0b0000'0000'0000'0000'0000'0000'0000'0101,
-        PIO0 = 0b0000'0000'0000'0000'0000'0000'0000'0110,
-        PIO1 = 0b0000'0000'0000'0000'0000'0000'0000'0111,
-        GPCK = 0b0000'0000'0000'0000'0000'0000'0000'1000,
-        USB  = 0b0000'0000'0000'0000'0000'0000'0000'1001,
-        NULL = 0b0000'0000'0000'0000'0000'0000'0001'1111,
+        SPI     = 1,
+        UART    = 2,
+        I2C     = 3,
+        PWM     = 4,
+        SIO     = 5,
+        PIO0    = 6,
+        PIO1    = 7,
+        GPClock = 8,
+        USB     = 9,
+        Null    = 31,
     };
 };
 
-using GPIOControlOutOver = ::iocommon::GPIOControlOutOver;
+using GPIOControlOutOverride = ::iocommon::GPIOControlOutOverride;
 
-using GPIOControlOutEnOver = ::iocommon::GPIOControlOutEnOver;
+using GPIOControlOutEnOverride = ::iocommon::GPIOControlOutEnOverride;
 
-using GPIOControlInOver = ::iocommon::GPIOControlInOver;
+using GPIOControlInOverride = ::iocommon::GPIOControlInOverride;
+
+using GPIOControl = ::iocommon::GPIOControl;
 // ~control
 
 struct IRQControl {

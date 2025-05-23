@@ -24,7 +24,7 @@
 #define RESETS_BASE              0x4000'c000 // resets.hpp
 #define PSM_BASE                 0x4001'0000 // psm.hpp
 #define IO_BANK0_BASE            0x4001'4000 // io-bank0.hpp
-#define IO_QSPI_BASE             0x4001'8000 // WIP io-qspi.hpp
+#define IO_QSPI_BASE             0x4001'8000 // io-qspi.hpp
 #define PADS_BANK0_BASE          0x4001'c000 // TODO
 #define PADS_QSPI_BASE           0x4002'0000 // TODO
 #define XOSC_BASE                0x4002'4000 // xosc.hpp

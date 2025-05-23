@@ -11,15 +11,15 @@ struct ControlFreqRange {
 
 struct ControlEnable {
     enum : u32 {
-        DISABLE = 0xd1e,
-        ENABLE  = 0xfab,
+        Disable = 0xd1e,
+        Enable  = 0xfab,
     };
 };
 
 struct Control {
     enum : u32 {
-        FREQ_RANGE = 0b0000'0000'0000'0000'0000'1111'1111'1111,
-        ENABLE     = 0b0000'0000'1111'1111'1111'0000'0000'0000,
+        FreqRange = 0b0000'0000'0000'0000'0000'1111'1111'1111,
+        Enable    = 0b0000'0000'1111'1111'1111'0000'0000'0000,
     };
 };
 
@@ -27,23 +27,23 @@ using StatusFreqRange = ControlFreqRange;
 
 struct Status {
     enum : u32 {
-        FREQ_RANGE = 0b0000'0000'0000'0000'0000'0000'0000'0011,
-        ENABLED    = 0b0000'0000'0000'0000'0001'0000'0000'0000,
-        BADWRITE   = 0b0000'0001'0000'0000'0000'0000'0000'0000,
-        STABLE     = 0b1000'0000'0000'0000'0000'0000'0000'0000,
+        FreqRange = 0b0000'0000'0000'0000'0000'0000'0000'0011,
+        Enabled   = 0b0000'0000'0000'0000'0001'0000'0000'0000,
+        BadWrite  = 0b0000'0001'0000'0000'0000'0000'0000'0000,
+        Stable    = 0b1000'0000'0000'0000'0000'0000'0000'0000,
     };
 };
 
 struct Dormant {
     enum : u32 {
-        DORMANT = 0x636f6d61,
-        WAKE    = 0x77616b65,
+        Dormant_ = 0x636f6d61,
+        Wake     = 0x77616b65,
     };
 };
 
 struct StartUp {
     enum : u32 {
-        DELAY = 0b0000'0000'0000'0000'0011'1111'1111'1111,
+        Delay = 0b0000'0000'0000'0000'0011'1111'1111'1111,
         X4    = 0b0000'0000'0001'0000'0000'0000'0000'0000,
     };
 };

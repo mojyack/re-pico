@@ -31,22 +31,24 @@ auto unreset(const u32 reset_num) -> void {
 auto enable_gpio_25() -> void {
     unreset(resets::ResetNum::IOBank0);
 
-    IOBANK0_REGS.status_control[25].control = iobank0::GPIOControlFuncSel::SIO;
+    IOBANK0_REGS.status_control[25].control = BF(iobank0::GPIOControl::FuncSelect, iobank0::GPIOControlFuncSelect::SIO);
 
     SIO_REGS.gpio_oe_set = 1 << 25;
 }
 
 auto init_system() -> void {
     // enable xosc
-    XOSC_REGS.control = BF(xosc::Control::ENABLE, xosc::ControlEnable::ENABLE) | BF(xosc::Control::FREQ_RANGE, xosc::ControlFreqRange::_1p15MHz);
-    wait_for_bit(XOSC_REGS.status, xosc::Status::STABLE);
+    XOSC_REGS.control =
+        BF(xosc::Control::Enable, xosc::ControlEnable::Enable) |
+        BF(xosc::Control::FreqRange, xosc::ControlFreqRange::_1p15MHz);
+    wait_for_bit(XOSC_REGS.status, xosc::Status::Stable);
     // enable system pll
     unreset(resets::ResetNum::PLLSys);
     PLL_SYS_REGS.feedback_div = 100; // VCO clock = 12MHz * 100 = 1.2GHz
-    PLL_SYS_REGS.power_down &= ~(BF(pll::PowerDown::PD, 1) | BF(pll::PowerDown::VCOPD, 1));
-    wait_for_bit(PLL_SYS_REGS.control_and_status, pll::ControlAndStatus::LOCK);
-    PLL_SYS_REGS.primary = BF(pll::Primary::POSTDIV1, 6) | BF(pll::Primary::POSTDIV2, 2); // 1.2GHz / 6 / 2 = 100MHz
-    PLL_SYS_REGS.power_down &= ~(BF(pll::PowerDown::POSTDIVPD, 1));
+    PLL_SYS_REGS.power_down &= ~(BF(pll::PowerDown::Core, 1) | BF(pll::PowerDown::VCO, 1));
+    wait_for_bit(PLL_SYS_REGS.control_and_status, pll::ControlAndStatus::Lock);
+    PLL_SYS_REGS.primary = BF(pll::Primary::Postdiv1, 6) | BF(pll::Primary::Postdiv2, 2); // 1.2GHz / 6 / 2 = 100MHz
+    PLL_SYS_REGS.power_down &= ~(BF(pll::PowerDown::Postdiv, 1));
     // setup clock generators
     CLOCKS_REGS.clock_ref.control |= BF(clocks::RefClockControl::Source, clocks::RefClockSource::XOSC);
     wait_for_bit(CLOCKS_REGS.clock_ref.selected, 1 << clocks::RefClockSource::XOSC);
