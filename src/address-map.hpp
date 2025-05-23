@@ -30,9 +30,9 @@
 #define XOSC_BASE                0x4002'4000 // xosc.hpp
 #define PLL_SYS_BASE             0x4002'8000 // pll.hpp
 #define PLL_USB_BASE             0x4002'c000 // pll.hpp
-#define BUSCTRL_BASE             0x4003'0000 // TODO
-#define UART0_BASE               0x4003'4000 // TODO
-#define UART1_BASE               0x4003'8000 // TODO
+#define BUSCTRL_BASE             0x4003'0000 // busctrl.hpp
+#define UART0_BASE               0x4003'4000 // uart.hpp
+#define UART1_BASE               0x4003'8000 // uart.hpp
 #define SPI0_BASE                0x4003'c000 // TODO
 #define SPI1_BASE                0x4004'0000 // TODO
 #define I2C0_BASE                0x4004'4000 // TODO
