@@ -32,11 +32,11 @@ auto enable_gpio_25() -> void {
 
 auto init_system() -> void {
     // enable xosc
-    XOSC_REGS.control |= BF(xosc::ControlEnable::ENABLE, xosc::Control::ENABLE);
+    XOSC_REGS.control = BF(xosc::Control::ENABLE, xosc::ControlEnable::ENABLE) | BF(xosc::Control::FREQ_RANGE, xosc::ControlFreqRange::_1p15MHz);
     wait_for_bit(XOSC_REGS.status, xosc::Status::STABLE);
     // enable system pll
     unreset(resets::ResetNum::PLL_SYS);
-    PLL_SYS_REGS.feedback_div = 100; // VCO clokc = 12MHz * 100 = 1.2GHz
+    PLL_SYS_REGS.feedback_div = 100; // VCO clock = 12MHz * 100 = 1.2GHz
     PLL_SYS_REGS.power_down &= ~(BF(pll::PowerDown::PD, 1) | BF(pll::PowerDown::VCOPD, 1));
     wait_for_bit(PLL_SYS_REGS.control_and_status, pll::ControlAndStatus::LOCK);
     PLL_SYS_REGS.primary = BF(pll::Primary::POSTDIV1, 6) | BF(pll::Primary::POSTDIV2, 2); // 1.2GHz / 6 / 2 = 100MHz
