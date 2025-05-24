@@ -21,6 +21,8 @@ using uintn = Conditional<size == 64, u64, Conditional<size == 32, u32, Conditio
 // when small | data      size
 //                        ^ mode bit here
 
+struct StringView;
+
 struct String {
     using Size = uintn<sizeof(void*) * 8 / 2>;
 
@@ -35,10 +37,6 @@ struct String {
     };
     static_assert(sizeof(Large) == sizeof(Small));
 
-    constexpr static auto can_be_small(const usize size) -> bool {
-        return size <= sizeof(Small::data) - 1;
-    }
-
     union {
         Large large;
         Small small;
@@ -46,13 +44,20 @@ struct String {
 
     auto is_small() const -> bool;
     auto size() const -> usize;
+    auto data() -> char*;
     auto data() const -> const char*;
+    auto resize(usize new_size) -> bool;
     auto clear() -> void;
+    auto append(StringView str) -> bool;
+
+    auto operator=(String&& other) -> String&;
 
     String();
+    String(String&& other);
     ~String();
 
-    static auto create(const char* str) -> Optional<String>;
+    static auto create(StringView str) -> Optional<String>;
+    static auto create(usize capacity) -> Optional<String>;
 };
 
 struct StringView {

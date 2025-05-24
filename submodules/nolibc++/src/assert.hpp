@@ -17,7 +17,7 @@
 #define ensure(cond)                               \
     if(!(cond)) {                                  \
         noxx::console_out("assertion failed at "); \
-        noxx::console_out(__func__);               \
+        noxx::console_out(__FILE__);               \
         noxx::console_out(":");                    \
         noxx::console_out(TOSTRING(__LINE__));     \
         noxx::console_out("\r\n");                 \
@@ -26,7 +26,7 @@
 #undef unwrap
 #define unwrap(var, exp)  \
     auto var##_o = (exp); \
-    ensure(var##_o, act); \
+    ensure(var##_o);      \
     auto& var = *var##_o;
 
 #else

@@ -4,7 +4,7 @@ LD      := ld.lld
 OBJCOPY := llvm-objcopy
 
 CFLAGS += -mcpu=cortex-m0 -nostdinc -Isrc
-CXXFLAGS += $(CFLAGS) -std=c++23 -fno-exceptions
+CXXFLAGS += $(CFLAGS) -std=c++23 -fno-exceptions -fno-rtti
 LDFLAGS += -nostdlib
 
 .PHONY: all clean

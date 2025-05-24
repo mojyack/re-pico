@@ -1,4 +1,8 @@
 #pragma once
+#if defined(NOXX_TEST)
+#include <new>
+#endif
+
 #include "move.hpp"
 
 namespace noxx {

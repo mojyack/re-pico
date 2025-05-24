@@ -7,12 +7,14 @@ auto malloc(usize size) -> void*;
 auto free(void* ptr) -> void;
 } // namespace noxx
 
+#if !defined(NOXX_TEST)
 // placement new support
-inline auto operator new(usize, void* ptr) -> void* {
+inline auto operator new(usize, void* ptr) noexcept -> void* {
     return ptr;
 }
+#endif
 
-#ifdef NOXX_TEST
+#if defined(NOXX_TEST)
 namespace noxx {
 auto dump_state() -> void;
 } // namespace noxx

@@ -32,8 +32,8 @@ auto set_flag_2(usize& num, bool flag) -> void {
 
 struct ChunkHeader {
     // use last two bits of them as a flag
-    usize next_r_free; // 0..2: next, 1: reserved, 0: is_free
-    usize prev_r_r;    // 0..2: prev, 1..0: reserved
+    usize next_r_free; // ..2: next, 1: reserved, 0: is_free
+    usize prev_r_r;    // ..2: prev, 1..0: reserved
 
     auto next() -> ChunkHeader* {
         return read_ptr(next_r_free);
@@ -134,7 +134,7 @@ auto free(void* const ptr) -> void {
 }
 } // namespace noxx
 
-#ifdef NOXX_TEST
+#if defined(NOXX_TEST)
 #include <print>
 
 namespace noxx {
