@@ -14,10 +14,7 @@ all: build/firmware.uf2
 clean:
 	rm -rf build
 
-build:
-	mkdir $@
-
-build/firmware.elf: src/link.ld build/boot2.o build/main.o build/rom.o
+build/firmware.elf: src/link.ld build/boot2.o build/main.o build/rom.o build/noxx/malloc.o
 	$(LD) $(LDFLAGS) -T $^ -o $@
 
 build/firmware.bin: build/firmware.elf
@@ -29,5 +26,6 @@ build/firmware-crc.bin: build/firmware.bin
 build/firmware.uf2: build/firmware-crc.bin
 	python uf2/utils/uf2conv.py -b 0x10000000 -f 0xe48bff56 -c $< -o $@
 
-build/%.o: src/%.cpp build
+build/%.o: src/%.cpp
+	mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -c $< -o $@

@@ -25,6 +25,8 @@ SECTIONS {
         *(.data*)
     } > sram AT > flash
 
+    heap_start = .;
+
     .stack (NOLOAD) : {
         . = ORIGIN(sram) + LENGTH(sram);
         stack_top = .; 

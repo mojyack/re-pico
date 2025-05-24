@@ -10,8 +10,10 @@
 #include "hw/wd.hpp"
 #include "hw/xosc.hpp"
 #include "noxx/bits.hpp"
+#include "noxx/malloc.hpp"
 
 // from linker script
+extern u32 heap_start;
 extern u32 stack_top;
 extern u32 bss_start;
 extern u32 bss_end;
@@ -95,7 +97,17 @@ auto print(const char* str) -> void {
     }
 }
 
-auto num = int();
+auto ptr_to_str(usize ptr, char* str) -> void {
+    constexpr auto    top_byte_shift = (sizeof(ptr) - 1) * 8;
+    static const auto table          = "0123456789abcdef";
+    for(auto i = usize(0); i < sizeof(ptr); i += 1) {
+        const auto top = (ptr & (usize(0xff) << top_byte_shift)) >> top_byte_shift;
+        str[0]         = table[top / 16];
+        str[1]         = table[top % 16];
+        str += 2;
+        ptr <<= 8;
+    }
+}
 
 auto entry() -> void {
     for(auto i = u32(0); i < &bss_end - &bss_start; i += 1) {
@@ -108,6 +120,8 @@ auto entry() -> void {
     if(ROM.version >= 2) {
         rom::dops = (rom::DOps*)rom::lookup_data(rom::code::soft_double_table);
     }
+    const auto heap_end = (usize)&stack_top - 8 * 1024; // 8KB for stack
+    noxx::set_heap(&heap_start, heap_end - (usize)&heap_start);
     enable_gpio_25();
     init_system();
 
@@ -139,11 +153,18 @@ auto entry() -> void {
         version[7] += ROM.version;
         print(version);
         print("\r\n");
-        char popcount[] = "popcount0";
-        popcount[8] += num;
-        num += rom::fops->float2int(rom::fops->fadd(0.5, 0.5));
-        print(popcount);
-        print("\r\n");
+        char hs[] = "00000000\r\n";
+        char hz[] = "00000000\r\n";
+        char test[] = "00000000\r\n";
+        ptr_to_str((usize)&heap_start, hs);
+        ptr_to_str(heap_end - (usize)&heap_start, hz);
+        ptr_to_str(0x10203040, test);
+        print("heap_start\r\n");
+        print(hs);
+        print("heap_end\r\n");
+        print(hz);
+        print("test\r\n");
+        print(test);
         // SIO_REGS.gpio_out_xor = 1 << 25;
         usleep(50000);
         if(!(UART0_REGS.flag & uart::Flag::RXFIFOEmpty)) {
