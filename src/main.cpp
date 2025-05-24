@@ -11,6 +11,7 @@
 #include "hw/xosc.hpp"
 #include "noxx/bits.hpp"
 #include "noxx/malloc.hpp"
+#include "noxx/string.hpp"
 
 // from linker script
 extern u32 heap_start;
@@ -87,16 +88,6 @@ constexpr auto calc_baud_rate_divisor(u32 clk_peri, u32 baud) -> Div {
     return {div >> 7, (div & 0b1111111) >> 1};
 }
 
-auto print(const char* str) -> void {
-    while(*str != '\0') {
-        while(UART0_REGS.flag & uart::Flag::TXFIFOFull) {
-        }
-        UART0_REGS.data = *str;
-        str += 1;
-        SIO_REGS.gpio_out_xor = 1 << 25;
-    }
-}
-
 auto ptr_to_str(usize ptr, char* str) -> void {
     constexpr auto    top_byte_shift = (sizeof(ptr) - 1) * 8;
     static const auto table          = "0123456789abcdef";
@@ -107,6 +98,22 @@ auto ptr_to_str(usize ptr, char* str) -> void {
         str += 2;
         ptr <<= 8;
     }
+}
+
+auto print(const char* str) -> void {
+    while(*str != '\0') {
+        while(UART0_REGS.flag & uart::Flag::TXFIFOFull) {
+        }
+        UART0_REGS.data = *str;
+        str += 1;
+        // SIO_REGS.gpio_out_xor = 1 << 25;
+    }
+}
+
+auto print(usize num) -> void {
+    char buf[] = "00000000\r\n";
+    ptr_to_str(num, buf);
+    print(buf);
 }
 
 auto entry() -> void {
@@ -138,40 +145,34 @@ auto entry() -> void {
         BF(uart::LineControl::EnableFIFO, 1);
     UART0_REGS_SET.control = BF(uart::Control::EnableUART, 1); // TX and RX are default enabled
 
+    print("ready\n");
     while(true) {
-        // auto s = 400000;
-        // for(auto i = 0; i < s; i += 1) {
-        //     SIO_REGS.gpio_out_set = 1 << 25;
-        // }
-        // for(auto i = 0; i < s; i += 1) {
-        //     SIO_REGS.gpio_out_clr = 1 << 25;
-        // }
-        // continue;
-        print((char*)rom::lookup_data(rom::code::copyright_string));
-        print("\r\n");
-        char version[] = "version0";
-        version[7] += ROM.version;
-        print(version);
-        print("\r\n");
-        char hs[] = "00000000\r\n";
-        char hz[] = "00000000\r\n";
-        char test[] = "00000000\r\n";
-        ptr_to_str((usize)&heap_start, hs);
-        ptr_to_str(heap_end - (usize)&heap_start, hz);
-        ptr_to_str(0x10203040, test);
-        print("heap_start\r\n");
-        print(hs);
-        print("heap_end\r\n");
-        print(hz);
-        print("test\r\n");
-        print(test);
         // SIO_REGS.gpio_out_xor = 1 << 25;
-        usleep(50000);
-        if(!(UART0_REGS.flag & uart::Flag::RXFIFOEmpty)) {
-            auto c = u8(UART0_REGS.data);
-            if(c == 'x') {
-                ((rom::reset_to_usb_boot*)rom::lookup_func(rom::code::reset_to_usb_boot))(0, 0);
-            }
+        if(UART0_REGS.flag & uart::Flag::RXFIFOEmpty) {
+            usleep(50000);
+            continue;
+        }
+        switch(u8(UART0_REGS.data)) {
+        case 'x':
+            ((rom::reset_to_usb_boot*)rom::lookup_func(rom::code::reset_to_usb_boot))(0, 0);
+            break;
+        case 's': {
+            const auto dump = [](noxx::String& str) -> void {
+                print((u32)str.data());
+                print(str.data());
+                print("\r\n");
+            };
+            dump(*noxx::String::create("hello"));
+            dump(*noxx::String::create("hello world 1234567890"));
+        } break;
+        case 'v': {
+            print((char*)rom::lookup_data(rom::code::copyright_string));
+            print("\r\n");
+            char version[] = "version0";
+            version[7] += ROM.version;
+            print(version);
+            print("\r\n");
+        } break;
         }
     }
 }
@@ -277,3 +278,15 @@ __attribute__((section(".vector"))) void* vector[48] = {
     nullptr,
 };
 }
+
+// noxx support
+namespace noxx {
+auto console_out(const char* ptr) -> bool {
+    print(ptr);
+    return true;
+}
+
+auto memcpy(void* dest, const void* src, usize size) -> void {
+    rom::memcpy((u8*)dest, (u8*)src, size);
+}
+} // namespace noxx

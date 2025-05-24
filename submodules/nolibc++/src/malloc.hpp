@@ -7,6 +7,11 @@ auto malloc(usize size) -> void*;
 auto free(void* ptr) -> void;
 } // namespace noxx
 
+// placement new support
+inline auto operator new(usize, void* ptr) -> void* {
+    return ptr;
+}
+
 #ifdef NOXX_TEST
 namespace noxx {
 auto dump_state() -> void;
