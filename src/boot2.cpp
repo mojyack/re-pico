@@ -1,7 +1,7 @@
-#include "bits.hpp"
-#include "m0plus.hpp"
-#include "spi-flash/w25q80.hpp"
-#include "ssi.hpp"
+#include "hw/m0plus.hpp"
+#include "hw/spi-flash/w25q80.hpp"
+#include "hw/ssi.hpp"
+#include "noxx/bits.hpp"
 
 extern "C" {
 namespace {

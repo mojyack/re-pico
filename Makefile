@@ -3,7 +3,7 @@ CXX     := clang++ --target=arm-none-eabi
 LD      := ld.lld
 OBJCOPY := llvm-objcopy
 
-CFLAGS += -mcpu=cortex-m0 -nostdinc
+CFLAGS += -mcpu=cortex-m0 -nostdinc -Isrc
 CXXFLAGS += $(CFLAGS) -std=c++23 -fno-exceptions
 LDFLAGS += -nostdlib
 

@@ -1,6 +1,7 @@
 #pragma once
+#include <noxx/int.hpp>
+
 #include "address-map.hpp"
-#include "int.hpp"
 #include "io-common.hpp"
 
 namespace ioqspi {

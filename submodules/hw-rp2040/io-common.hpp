@@ -1,5 +1,5 @@
 #pragma once
-#include "int.hpp"
+#include <noxx/int.hpp>
 
 namespace iocommon {
 struct GPIOStatus {

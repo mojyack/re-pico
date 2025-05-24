@@ -1,5 +1,0 @@
---target=arm
--mcpu=cortex-m0
--nostdlib
--nostdinc
--std=c++23
