@@ -10,6 +10,7 @@
 
 #undef STRINGIFY
 #define STRINGIFY(n) #n
+
 #undef TOSTRING
 #define TOSTRING(n) STRINGIFY(n)
 
@@ -23,6 +24,7 @@
         noxx::console_out("\r\n");                 \
         error_act;                                 \
     }
+
 #undef unwrap
 #define unwrap(var, exp)  \
     auto var##_o = (exp); \
@@ -36,4 +38,5 @@
 #pragma pop_macro("TOSTRING")
 #pragma pop_macro("ensure")
 #pragma pop_macro("unwrap")
+
 #endif

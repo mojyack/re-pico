@@ -4,11 +4,13 @@
 #include "type-traits.hpp"
 
 namespace noxx {
-auto strlen(const char* str) -> usize;
-
 // {64,32,16} -> u{64,32,16}
 template <usize size>
-using uintn = Conditional<size == 64, u64, Conditional<size == 32, u32, Conditional<size == 16, u16, void>>>;
+using uintn = Conditional<size == 64, u64,
+                          Conditional<size == 32, u32,
+                                      Conditional<size == 16, u16,
+                                                  Conditional<size == 8, u8,
+                                                              void>>>>;
 
 // for 32bit system:
 // layout:
@@ -50,6 +52,9 @@ struct String {
     auto clear() -> void;
     auto append(StringView str) -> bool;
 
+    auto operator[](usize i) -> char&;
+    auto operator[](usize i) const -> const char&;
+    auto operator==(StringView other) const -> bool;
     auto operator=(String&& other) -> String&;
 
     String();
@@ -58,17 +63,5 @@ struct String {
 
     static auto create(StringView str) -> Optional<String>;
     static auto create(usize capacity) -> Optional<String>;
-};
-
-struct StringView {
-    const char* ptr;
-    usize       length = 0;
-
-    auto size() const -> usize;
-    auto data() const -> const char*;
-    auto clear() -> void;
-
-    StringView(const char* str);
-    StringView(const String& str);
 };
 } // namespace noxx

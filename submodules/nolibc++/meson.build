@@ -11,8 +11,19 @@ executable('malloc-test',
 executable('string-test',
   files(
     'src/malloc.cpp',
+    'src/string-view.cpp',
     'src/string.cpp',
+    'tests/noxx-support.cpp',
     'tests/string.cpp',
+  )
+)
+
+executable('format-test',
+  files(
+    'src/malloc.cpp',
+    'src/string-view.cpp',
+    'src/string.cpp',
+    'tests/format.cpp',
     'tests/noxx-support.cpp',
   )
 )

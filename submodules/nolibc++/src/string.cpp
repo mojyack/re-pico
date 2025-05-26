@@ -2,16 +2,9 @@
 #include "assert.hpp"
 #include "malloc.hpp"
 #include "platform.hpp"
+#include "string-view.hpp"
 
 namespace noxx {
-auto strlen(const char* const str) -> usize {
-    auto ptr = str;
-    while(*ptr != '\0') {
-        ptr += 1;
-    }
-    return ptr - str;
-}
-
 auto String::is_small() const -> bool {
     return small.length & 0b1000'0000;
 }
@@ -89,6 +82,18 @@ auto String::append(const StringView str) -> bool {
 #undef error_act
 }
 
+auto String::operator[](const usize i) -> char& {
+    return data()[i];
+}
+
+auto String::operator[](const usize i) const -> const char& {
+    return (*(String*)this)[i];
+}
+
+auto String::operator==(const StringView other) const -> bool {
+    return StringView(*this) == other;
+}
+
 auto String::operator=(String&& other) -> String& {
     large              = other.large;
     other.small.length = 0b1000'0000;
@@ -133,27 +138,5 @@ auto String::create(StringView str) -> Optional<String> {
     }
     return move(ret);
 #undef error_act
-}
-
-auto StringView::size() const -> usize {
-    return length;
-}
-
-auto StringView::data() const -> const char* {
-    return ptr;
-}
-
-auto StringView::clear() -> void {
-    length = 0;
-}
-
-StringView::StringView(const char* const str) {
-    ptr    = str;
-    length = strlen(str);
-}
-
-StringView::StringView(const String& str) {
-    ptr    = str.data();
-    length = str.size();
 }
 } // namespace noxx

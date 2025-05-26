@@ -3,6 +3,7 @@
 
 #include "noxx/assert.hpp"
 #include "noxx/malloc.hpp"
+#include "noxx/string-view.hpp"
 #include "noxx/string.hpp"
 
 namespace {
