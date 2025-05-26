@@ -15,7 +15,8 @@ template <class T>
 concept format_supported_integrals = is_same<T, u8> ||
                                      is_same<T, i16> || is_same<T, u16> ||
                                      is_same<T, i32> || is_same<T, u32> ||
-                                     is_same<T, i64> || is_same<T, u64>;
+                                     is_same<T, i64> || is_same<T, u64> ||
+                                     is_same<T, usize>;
 
 struct Params {
     char filler;
@@ -53,7 +54,7 @@ constexpr auto parse_params() -> Params {
 
 // params={} or {(base)} or {(filler,width,base)} where base=one of "dxb"
 template <comptime::String params>
-auto format(String& result, const integer::format_supported_integrals auto& var) -> bool {
+auto format_segment(String& result, const integer::format_supported_integrals auto var) -> bool {
 #define error_act return false
     constexpr auto ps = integer::parse_params<params>();
 

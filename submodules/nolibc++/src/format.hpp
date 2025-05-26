@@ -1,8 +1,8 @@
 #pragma once
 #include "comptime-string.hpp"
 #include "format/boolean.hpp"
-#include "format/formatter.hpp"
 #include "format/integer.hpp"
+#include "format/pointer.hpp"
 #include "format/string.hpp"
 #include "optional.hpp"
 
@@ -60,7 +60,7 @@ auto format_step(String& result, const Arg& arg, const Args&... args) -> bool {
     constexpr auto close = find_not_escaped<params, '}', open + 1>;
     static_assert(close != comptime::npos);
     constexpr auto fmt = comptime::substr<params, open + 1, close - (open + 1)>;
-    ensure(format<fmt>(result, arg));
+    ensure(format_segment<fmt>(result, arg));
     ensure((format_step<params, close + 1, Args...>(result, args...)));
     return true;
 #undef error_act

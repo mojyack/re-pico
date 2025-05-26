@@ -6,6 +6,14 @@ template <usize N>
 struct String {
     char data[N > 0 ? N : 1] = {};
 
+    constexpr auto size() const -> usize {
+        return N;
+    }
+
+    constexpr auto empty() const -> bool {
+        return size() == 0;
+    }
+
     constexpr auto operator[](const int i) const -> char {
         if(i >= 0) {
             return data[i];
@@ -14,12 +22,16 @@ struct String {
         }
     }
 
-    constexpr auto size() const -> usize {
-        return N;
-    }
-
-    constexpr auto empty() const -> bool {
-        return size() == 0;
+    constexpr auto operator==(String other) const -> bool {
+        if(size() != other.size()) {
+            return false;
+        }
+        for(auto i = usize(0); i < size(); i += 1) {
+            if(data[i] != other[i]) {
+                return false;
+            }
+        }
+        return true;
     }
 
     constexpr String() {
@@ -40,6 +52,20 @@ struct String {
 template <usize N>
 String(const char (&)[N]) -> String<N - 1>;
 
+template <String a, String b, String... rests>
+constexpr auto concat_fn() -> auto {
+    if constexpr(sizeof...(rests) == 0) {
+        auto ret = String<a.size() + b.size()>();
+        __builtin_memcpy(ret.data, a.data, a.size());
+        __builtin_memcpy(ret.data + a.size(), b.data, b.size());
+        return ret;
+    } else {
+        return concat_fn<concat_fn<a, b>(), rests...>();
+    }
+}
+template <String a, String b, String... rests>
+constexpr auto concat = concat_fn<a, b, rests...>();
+
 constexpr auto npos = (usize)-1;
 
 template <String str, char key, usize index>
@@ -58,9 +84,7 @@ constexpr auto find = find_fn<str, key, index>();
 template <String str, usize index, usize len>
 constexpr auto substr_fn() -> String<len> {
     auto ret = String<len>();
-    for(auto i = usize(0); i < len; i += 1) {
-        ret.data[i] = str[i + index];
-    }
+    __builtin_memcpy(ret.data, str.data + index, len);
     return ret;
 }
 template <String str, usize index, usize len = str.size() - index>
@@ -94,4 +118,30 @@ constexpr auto str_to_int_fn() -> int {
 
 template <String str, int base = 10>
 constexpr auto str_to_int = str_to_int_fn<str, base, 0>();
+
+// to string
+template <usize num, String str = "">
+constexpr auto uint_to_str_fn() -> auto {
+    if constexpr(num == 0) {
+        if constexpr(!str.empty()) {
+            return str;
+        } else {
+            return "0";
+        }
+    } else {
+        constexpr auto c = '0' + num % 10;
+        return uint_to_str_fn<num / 10, concat<String<1>(c), str>>();
+    }
+}
+
+template <auto num>
+constexpr auto int_to_str_fn() -> auto {
+    if constexpr(num >= 0) {
+        return uint_to_str_fn<num>();
+    } else {
+        return concat<String("-"), uint_to_str_fn<-num>()>;
+    }
+}
+template <auto num>
+constexpr auto int_to_str = int_to_str_fn<num>();
 } // namespace noxx::comptime
