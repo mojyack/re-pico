@@ -80,7 +80,6 @@ auto format(String& result, const integer::format_supported_integrals auto& var)
     return true;
 #undef error_act
 }
-
 } // namespace noxx::fmt
 
 #include "../assert.hpp"
