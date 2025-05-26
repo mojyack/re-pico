@@ -1,7 +1,9 @@
 #pragma once
 #include "comptime-string.hpp"
+#include "format/boolean.hpp"
 #include "format/formatter.hpp"
 #include "format/integer.hpp"
+#include "format/string.hpp"
 #include "optional.hpp"
 
 #include "assert.hpp"

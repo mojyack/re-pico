@@ -17,9 +17,10 @@ auto main() -> int {
     noxx::set_heap(heap.data(), heap.size());
     // plain string
     ensure(*noxx::format<"hello">() == "hello");
-    // ensure(noxx::format<"{} {}">("hello", "world") == "hello world");
+    ensure(*noxx::format<"{} {}">("hello", "world") == "hello world");
     // escape
     ensure(*noxx::format<"{{}}">() == "{{}}");
+
     // integer
     ensure(*noxx::format<"u8={}">(u8(0xff)) == "u8=255");
     ensure(*noxx::format<"u16={}">(u16(0x7fff)) == "u16=32767");
@@ -32,7 +33,11 @@ auto main() -> int {
     ensure(*noxx::format<"u8={x}">(u8(0xff)) == "u8=ff");
     ensure(*noxx::format<"u8={02x}">(u8(0xff)) == "u8=ff");
     ensure(*noxx::format<"u8={03x}">(u8(0xff)) == "u8=0ff");
-#undef error_act
+
+    // boolean
+    ensure(*noxx::format<"true={} false={}">(true, false) == "true=true false=false");
+
     std::println("pass");
     return 0;
+#undef error_act
 }
