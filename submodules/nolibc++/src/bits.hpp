@@ -2,6 +2,9 @@
 #include "int.hpp"
 
 namespace noxx {
+template <class T>
+constexpr auto top_bit = T(1) << (sizeof(T) * 8 - 1);
+
 constexpr auto lsb(usize num) -> usize {
     auto ret = usize(0);
     while(!(num & 1)) {
@@ -10,9 +13,19 @@ constexpr auto lsb(usize num) -> usize {
     }
     return ret;
 }
-
 static_assert(lsb(1) == 0);
 static_assert(lsb(8) == 3);
+
+constexpr auto msb(usize num) -> usize {
+    auto ret = usize(0);
+    while(!(num & top_bit<usize>)) {
+        num <<= 1;
+        ret += 1;
+    }
+    return ret;
+}
+static_assert((sizeof(usize) == 4 ? msb(0xffffffff) : msb(0xffffffffffffffff)) == 0);
+static_assert((sizeof(usize) == 4 ? msb(0x00ffffff) : msb(0x00ffffffffffffff)) == 8);
 
 // exp=0:1byte exp=1:2byte exp=2:4byte ... exp=n:2^nbyte
 template <class T>
