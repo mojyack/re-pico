@@ -35,33 +35,26 @@ auto format_step(String& result) -> bool {
     constexpr auto rest      = str.size() - cursor;
     const auto     prev_size = result.size();
     result.resize(prev_size + rest);
-    // printf("step(tail) result=%s cursor=%lu resize=%lu\n", result.data(), cursor, prev_size + rest);
-    for(auto i = usize(0); i < rest; i += 1) {
-        // printf("copy %d %c\n", i, str[cursor + i]);
-        result[prev_size + i] = str[cursor + i];
-    }
+    __builtin_memcpy(result.data() + prev_size, str.data + cursor, rest);
     return true;
 }
 
-template <comptime::String params, usize cursor, class Arg, class... Args>
+template <comptime::String str, usize cursor, class Arg, class... Args>
 auto format_step(String& result, const Arg& arg, const Args&... args) -> bool {
 #define error_act return false
-    constexpr auto open = find_not_escaped<params, '{', cursor>;
+    constexpr auto open = find_not_escaped<str, '{', cursor>;
     static_assert(open != comptime::npos, "too many format parameters");
 
     const auto prev_size = result.size();
     const auto rest      = open - cursor;
     result.resize(prev_size + rest);
-    // printf("step result=%s cursor=%lu open=%d resize=%lu\n", result.data(), cursor, (i64)open, prev_size + rest);
-    for(auto i = usize(0); i < rest; i += 1) {
-        result[prev_size + i] = params[cursor + i];
-    }
+    __builtin_memcpy(result.data() + prev_size, str.data + cursor, rest);
 
-    constexpr auto close = find_not_escaped<params, '}', open + 1>;
+    constexpr auto close = find_not_escaped<str, '}', open + 1>;
     static_assert(close != comptime::npos);
-    constexpr auto fmt = comptime::substr<params, open + 1, close - (open + 1)>;
+    constexpr auto fmt = comptime::substr<str, open + 1, close - (open + 1)>;
     ensure(format_segment<fmt>(result, arg));
-    ensure((format_step<params, close + 1, Args...>(result, args...)));
+    ensure((format_step<str, close + 1, Args...>(result, args...)));
     return true;
 #undef error_act
 }
