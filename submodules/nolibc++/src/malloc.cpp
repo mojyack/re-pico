@@ -68,7 +68,7 @@ struct ChunkHeader {
     }
 };
 
-constexpr auto chunk_header_align = lsb<alignof(ChunkHeader)>;
+constexpr auto chunk_header_align = lsb(alignof(ChunkHeader));
 
 static_assert(chunk_header_align >= 2); // ensure rooms for flags
 
