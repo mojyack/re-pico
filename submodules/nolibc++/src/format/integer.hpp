@@ -58,7 +58,7 @@ auto format_segment(String& result, const integer::format_supported_integrals au
 #define error_act return false
     constexpr auto ps = integer::parse_params<params>();
 
-    constexpr auto max_int_len = log((uintn<sizeof(int) * 8>)-1, ps.base) + 1 /*sign*/;
+    constexpr auto max_int_len = log((uintn<sizeof(var) * 8>)-1, ps.base) + 1 /*sign*/;
 
     auto       buf    = Array<char, max(max_int_len, ps.width)>();
     auto       cursor = buf.size() - 1;
