@@ -10,6 +10,7 @@
 #include "hw/wd.hpp"
 #include "hw/xosc.hpp"
 #include "noxx/bits.hpp"
+#include "noxx/format.hpp"
 #include "noxx/malloc.hpp"
 #include "noxx/string.hpp"
 
@@ -164,6 +165,9 @@ auto entry() -> void {
             };
             dump(*noxx::String::create("hello"));
             dump(*noxx::String::create("hello world 1234567890"));
+        } break;
+        case 'S': {
+            print((*noxx::format<"{} {}\r\n">("hello", "world")).data());
         } break;
         case 'v': {
             print((char*)rom::lookup_data(rom::code::copyright_string));

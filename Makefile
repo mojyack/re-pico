@@ -14,7 +14,13 @@ all: build/firmware.uf2
 clean:
 	rm -rf build
 
-build/firmware.elf: src/link.ld build/boot2.o build/main.o build/rom.o build/noxx/malloc.o build/noxx/string.o
+build/firmware.elf: src/link.ld \
+					build/boot2.o \
+					build/main.o \
+					build/rom.o \
+					build/noxx/malloc.o \
+					build/noxx/string.o \
+					build/noxx/string-view.o
 	$(LD) $(LDFLAGS) -T $^ -o $@
 
 build/firmware.bin: build/firmware.elf

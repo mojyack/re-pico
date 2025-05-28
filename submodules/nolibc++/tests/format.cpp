@@ -11,10 +11,19 @@ auto heap = std::array<std::byte, 4096>();
 
 auto main() -> int {
 #define error_act return -1
+
+    // comptime string
+    static_assert(noxx::comptime::String("hello") == "hello");
+    static_assert(noxx::comptime::String("hello") != "world");
+    static_assert(noxx::comptime::concat<"hello", " ", "world"> == "hello world");
     static_assert(noxx::comptime::str_to_int<"128"> == 128);
     static_assert(noxx::comptime::str_to_int<"-128"> == -128);
     static_assert(noxx::comptime::str_to_int<"ff", 16> == 255);
+    static_assert(noxx::comptime::int_to_str<16> == "16");
+    static_assert(noxx::comptime::int_to_str<-16> == "-16");
+
     noxx::set_heap(heap.data(), heap.size());
+
     // plain string
     ensure(*noxx::format<"hello">() == "hello");
     ensure(*noxx::format<"{} {}">("hello", "world") == "hello world");
@@ -36,6 +45,10 @@ auto main() -> int {
 
     // boolean
     ensure(*noxx::format<"true={} false={}">(true, false) == "true=true false=false");
+
+    // pointer
+    const auto ptr = (void*)0x0123456789;
+    ensure(*noxx::format<"ptr={}">(ptr) == "ptr=0x0000000123456789");
 
     std::println("pass");
     return 0;
