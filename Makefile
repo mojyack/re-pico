@@ -18,6 +18,7 @@ build/firmware.elf: src/link.ld \
 					build/boot2.o \
 					build/main.o \
 					build/rom.o \
+					build/abi.o \
 					build/noxx/malloc.o \
 					build/noxx/string.o \
 					build/noxx/string-view.o

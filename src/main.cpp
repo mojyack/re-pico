@@ -14,6 +14,8 @@
 #include "noxx/malloc.hpp"
 #include "noxx/string.hpp"
 
+#include "noxx/assert.hpp"
+
 // from linker script
 extern u32 heap_start;
 extern u32 stack_top;
@@ -89,18 +91,6 @@ constexpr auto calc_baud_rate_divisor(u32 clk_peri, u32 baud) -> Div {
     return {div >> 7, (div & 0b1111111) >> 1};
 }
 
-auto ptr_to_str(usize ptr, char* str) -> void {
-    constexpr auto    top_byte_shift = (sizeof(ptr) - 1) * 8;
-    static const auto table          = "0123456789abcdef";
-    for(auto i = usize(0); i < sizeof(ptr); i += 1) {
-        const auto top = (ptr & (usize(0xff) << top_byte_shift)) >> top_byte_shift;
-        str[0]         = table[top / 16];
-        str[1]         = table[top % 16];
-        str += 2;
-        ptr <<= 8;
-    }
-}
-
 auto print(const char* str) -> void {
     while(*str != '\0') {
         while(UART0_REGS.flag & uart::Flag::TXFIFOFull) {
@@ -111,10 +101,19 @@ auto print(const char* str) -> void {
     }
 }
 
-auto print(usize num) -> void {
-    char buf[] = "00000000\r\n";
-    ptr_to_str(num, buf);
-    print(buf);
+auto println(const char* const str) -> void {
+    print(str);
+    print("\r\n");
+}
+
+template <noxx::comptime::String str, class... Args>
+auto println(const Args&... args) -> bool {
+#define error_act return false
+    unwrap(raw, noxx::format<str>(noxx::move(args)...));
+    print(raw.data());
+    print("\r\n");
+    return true;
+#undef error_act
 }
 
 auto entry() -> void {
@@ -146,7 +145,7 @@ auto entry() -> void {
         BF(uart::LineControl::EnableFIFO, 1);
     UART0_REGS_SET.control = BF(uart::Control::EnableUART, 1); // TX and RX are default enabled
 
-    print("ready\n");
+    println("ready");
     while(true) {
         // SIO_REGS.gpio_out_xor = 1 << 25;
         if(UART0_REGS.flag & uart::Flag::RXFIFOEmpty) {
@@ -158,24 +157,11 @@ auto entry() -> void {
             ((rom::reset_to_usb_boot*)rom::lookup_func(rom::code::reset_to_usb_boot))(0, 0);
             break;
         case 's': {
-            const auto dump = [](noxx::String& str) -> void {
-                print((u32)str.data());
-                print(str.data());
-                print("\r\n");
-            };
-            dump(*noxx::String::create("hello"));
-            dump(*noxx::String::create("hello world 1234567890"));
-        } break;
-        case 'S': {
-            print((*noxx::format<"{} {}\r\n">("hello", "world")).data());
+            println<"{} {}">("hello", "world");
         } break;
         case 'v': {
-            print((char*)rom::lookup_data(rom::code::copyright_string));
-            print("\r\n");
-            char version[] = "version0";
-            version[7] += ROM.version;
-            print(version);
-            print("\r\n");
+            println((char*)rom::lookup_data(rom::code::copyright_string));
+            println<"version {}">(ROM.version);
         } break;
         }
     }
