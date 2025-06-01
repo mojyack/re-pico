@@ -5,8 +5,22 @@
 
 extern "C" {
 namespace {
-auto wait_and_read(u8 count) -> u32;
-auto read_flash_sreg(u8 status_command) -> u8;
+inline auto wait_and_read(u8 count) -> u32 {
+    while(!(SSI_REGS.status & ssi::Status::TXFIFOEmpty) || SSI_REGS.status & ssi::Status::SSIBusy) {
+    }
+    auto result = 0;
+    while(count > 0) {
+        result = SSI_REGS.data_register[0];
+        count -= 1;
+    }
+    return result;
+}
+
+inline auto read_flash_sreg(const u8 status_command) -> u8 {
+    SSI_REGS.data_register[0] = status_command;
+    SSI_REGS.data_register[0] = status_command;
+    return wait_and_read(2);
+}
 } // namespace
 
 __attribute__((section(".boot2"))) auto boot_stage2() -> void {
@@ -61,25 +75,6 @@ __attribute__((section(".boot2"))) auto boot_stage2() -> void {
     asm("msr msp, %0" ::"r"(((void**)M0PLUS_REGS.vector_table_offset)[0])); // set stack pointer
     asm("bx %0" ::"r"(((void**)M0PLUS_REGS.vector_table_offset)[1]));       // jump to entry
 }
-
-namespace {
-__attribute__((section(".boot2"))) auto wait_and_read(u8 count) -> u32 {
-    while(!(SSI_REGS.status & ssi::Status::TXFIFOEmpty) || SSI_REGS.status & ssi::Status::SSIBusy) {
-    }
-    u32 result = 0;
-    while(count > 0) {
-        result = SSI_REGS.data_register[0];
-        count--;
-    }
-    return result;
-}
-
-__attribute__((section(".boot2"))) auto read_flash_sreg(u8 status_command) -> u8 {
-    SSI_REGS.data_register[0] = status_command;
-    SSI_REGS.data_register[0] = status_command;
-    return wait_and_read(2);
-}
-} // namespace
 
 __attribute__((section(".crc"))) u8 crc[4] = {'c', 'r', 'c', 'p'};
 }

@@ -1,2 +1,5 @@
 /build
+/tools/crc/crc
+/tools/crc/submodules
+/tools/uf2
 !/submodules
