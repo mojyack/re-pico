@@ -121,6 +121,10 @@ auto malloc(const usize size) -> void* {
 }
 
 auto free(void* const ptr) -> void {
+    if(ptr == nullptr) {
+        return;
+    }
+
     const auto chunk = (ChunkHeader*)((u8*)ptr - sizeof(ChunkHeader));
     const auto next  = chunk->next();
     const auto prev  = chunk->prev();
