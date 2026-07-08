@@ -18,6 +18,14 @@ executable('string-test',
   )
 )
 
+executable('vector-test',
+  files(
+    'src/malloc.cpp',
+    'tests/noxx-support.cpp',
+    'tests/vector.cpp',
+  )
+)
+
 executable('format-test',
   files(
     'src/malloc.cpp',
