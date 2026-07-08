@@ -1,4 +1,5 @@
 #include "noxx/bits.hpp"
+#include "noxx/platform.hpp"
 
 namespace {
 constexpr auto udiv(uint numerator, uint denominator) -> uint {
@@ -21,5 +22,50 @@ static_assert(udiv(128, 2) == 64);
 extern "C" {
 auto __aeabi_uidiv(uint numerator, uint denominator) -> uint {
     return udiv(numerator, denominator);
+}
+
+auto __aeabi_idiv(int numerator, int denominator) -> int {
+    const auto quotient = udiv(numerator < 0 ? -numerator : numerator, denominator < 0 ? -denominator : denominator);
+    return (numerator < 0) != (denominator < 0) ? -int(quotient) : int(quotient);
+}
+
+// returns {quotient, remainder} in {r0, r1}
+auto __aeabi_uidivmod(uint numerator, uint denominator) -> u64 {
+    const auto quotient = udiv(numerator, denominator);
+    return quotient | u64(numerator - quotient * denominator) << 32;
+}
+
+auto __aeabi_idivmod(int numerator, int denominator) -> u64 {
+    const auto quotient = __aeabi_idiv(numerator, denominator);
+    return u32(quotient) | u64(u32(numerator - quotient * denominator)) << 32;
+}
+
+auto __aeabi_memcpy(void* dest, const void* src, usize size) -> void {
+    noxx::memcpy(dest, src, size);
+}
+__attribute__((alias("__aeabi_memcpy"))) auto __aeabi_memcpy4(void* dest, const void* src, usize size) -> void;
+__attribute__((alias("__aeabi_memcpy"))) auto __aeabi_memcpy8(void* dest, const void* src, usize size) -> void;
+
+// optnone prevents clang from turning the loops back into the very libcalls being implemented
+__attribute__((optnone)) auto __aeabi_memset(void* dest, usize size, int value) -> void {
+    for(auto i = usize(0); i < size; i += 1) {
+        ((u8*)dest)[i] = u8(value);
+    }
+}
+__attribute__((alias("__aeabi_memset"))) auto __aeabi_memset4(void* dest, usize size, int value) -> void;
+__attribute__((alias("__aeabi_memset"))) auto __aeabi_memset8(void* dest, usize size, int value) -> void;
+
+auto __aeabi_memclr(void* dest, usize size) -> void {
+    __aeabi_memset(dest, size, 0);
+}
+__attribute__((alias("__aeabi_memclr"))) auto __aeabi_memclr4(void* dest, usize size) -> void;
+__attribute__((alias("__aeabi_memclr"))) auto __aeabi_memclr8(void* dest, usize size) -> void;
+
+__attribute__((optnone)) auto strlen(const char* str) -> usize {
+    auto len = usize(0);
+    while(str[len] != '\0') {
+        len += 1;
+    }
+    return len;
 }
 }
