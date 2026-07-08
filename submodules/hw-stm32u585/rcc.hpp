@@ -96,9 +96,30 @@ struct AHB3Enable {
     };
 };
 
+struct APB1Enable1 {
+    enum : u32 {
+        SPI2 = 0b0000'0000'0000'0000'0100'0000'0000'0000,
+    };
+};
+
 struct APB3Enable {
     enum : u32 {
         LPUART1 = 0b0000'0000'0000'0000'0000'0000'0100'0000,
+    };
+};
+
+struct ClockConfig1 {
+    enum : u32 {
+        SPI2Source = 0b0000'0000'0000'0011'0000'0000'0000'0000, // ClockConfig1SPI2Source
+    };
+};
+
+struct ClockConfig1SPI2Source {
+    enum : u32 {
+        PCLK1  = 0,
+        SysClk = 1,
+        HSI16  = 2,
+        MSIK   = 3,
     };
 };
 

@@ -2,6 +2,7 @@
 // non-secure addresses (TrustZone disabled)
 #define FLASH_BASE      0x0800'0000
 #define SRAM_BASE       0x2000'0000
+#define SPI2_BASE       0x4000'3800 // spi.hpp
 #define FLASH_REGS_BASE 0x4002'2000 // flash.hpp
 #define ICACHE_BASE     0x4003'0400 // TODO
 #define GPIOA_BASE      0x4202'0000 // gpio.hpp
