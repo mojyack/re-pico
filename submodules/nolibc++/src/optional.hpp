@@ -1,6 +1,8 @@
 #pragma once
 #if defined(NOXX_TEST)
 #include <new>
+#else
+#include "malloc.hpp"
 #endif
 
 #include "move.hpp"
