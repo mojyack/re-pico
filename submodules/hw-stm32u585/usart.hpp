@@ -5,7 +5,7 @@
 
 // USART/UART/LPUART share this register layout
 // note: LPUART baud_rate = 256 * clock / baud (20 bits), USART baud_rate = clock / baud
-namespace usart {
+namespace hw::usart {
 struct Control1 {
     enum : u32 {
         EnableUART     = 0b0000'0000'0000'0000'0000'0000'0000'0001,
@@ -56,6 +56,6 @@ struct Regs {
     v32  autonomous;       // 0x30
 };
 static_assert(sizeof(Regs) == 0x30 + 4);
-} // namespace usart
+} // namespace hw::usart
 
-#define LPUART1_REGS (*(usart::Regs*)(LPUART1_BASE))
+#define LPUART1_REGS (*(hw::usart::Regs*)(LPUART1_BASE))

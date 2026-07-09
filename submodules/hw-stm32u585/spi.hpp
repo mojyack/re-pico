@@ -3,7 +3,7 @@
 
 #include "address-map.hpp"
 
-namespace spi {
+namespace hw::spi {
 struct Control1 {
     enum : u32 {
         Enable      = 0b0000'0000'0000'0000'0000'0000'0000'0001,
@@ -64,6 +64,6 @@ struct Regs {
     v32  underrun_data; // 0x4C
 };
 static_assert(sizeof(Regs) == 0x4C + 4);
-} // namespace spi
+} // namespace hw::spi
 
-#define SPI2_REGS (*(spi::Regs*)(SPI2_BASE))
+#define SPI2_REGS (*(hw::spi::Regs*)(SPI2_BASE))

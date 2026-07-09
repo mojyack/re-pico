@@ -3,7 +3,7 @@
 
 #include "address-map.hpp"
 
-namespace rcc {
+namespace hw::rcc {
 struct Control {
     enum : u32 {
         MSISOn    = 0b0000'0000'0000'0000'0000'0000'0000'0001,
@@ -207,6 +207,6 @@ struct Regs {
     v32  privilege_config;   // 0x114
 };
 static_assert(sizeof(Regs) == 0x114 + 4);
-} // namespace rcc
+} // namespace hw::rcc
 
-#define RCC_REGS (*(rcc::Regs*)(RCC_BASE))
+#define RCC_REGS (*(hw::rcc::Regs*)(RCC_BASE))

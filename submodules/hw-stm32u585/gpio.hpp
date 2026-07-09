@@ -3,7 +3,7 @@
 
 #include "address-map.hpp"
 
-namespace gpio {
+namespace hw::gpio {
 // MODER, 2 bits per pin (reset state is Analog except some port A/B pins)
 struct Mode {
     enum : u32 {
@@ -62,14 +62,14 @@ constexpr auto alt_function(const u32 pin, const u32 af) -> u32 {
 constexpr auto alt_function_mask(const u32 pin) -> u32 {
     return 0b1111 << (pin % 8 * 4);
 }
-} // namespace gpio
+} // namespace hw::gpio
 
-#define GPIOA_REGS (*(gpio::Regs*)(GPIOA_BASE))
-#define GPIOB_REGS (*(gpio::Regs*)(GPIOB_BASE))
-#define GPIOC_REGS (*(gpio::Regs*)(GPIOC_BASE))
-#define GPIOD_REGS (*(gpio::Regs*)(GPIOD_BASE))
-#define GPIOE_REGS (*(gpio::Regs*)(GPIOE_BASE))
-#define GPIOF_REGS (*(gpio::Regs*)(GPIOF_BASE))
-#define GPIOG_REGS (*(gpio::Regs*)(GPIOG_BASE))
-#define GPIOH_REGS (*(gpio::Regs*)(GPIOH_BASE))
-#define GPIOI_REGS (*(gpio::Regs*)(GPIOI_BASE))
+#define GPIOA_REGS (*(hw::gpio::Regs*)(GPIOA_BASE))
+#define GPIOB_REGS (*(hw::gpio::Regs*)(GPIOB_BASE))
+#define GPIOC_REGS (*(hw::gpio::Regs*)(GPIOC_BASE))
+#define GPIOD_REGS (*(hw::gpio::Regs*)(GPIOD_BASE))
+#define GPIOE_REGS (*(hw::gpio::Regs*)(GPIOE_BASE))
+#define GPIOF_REGS (*(hw::gpio::Regs*)(GPIOF_BASE))
+#define GPIOG_REGS (*(hw::gpio::Regs*)(GPIOG_BASE))
+#define GPIOH_REGS (*(hw::gpio::Regs*)(GPIOH_BASE))
+#define GPIOI_REGS (*(hw::gpio::Regs*)(GPIOI_BASE))

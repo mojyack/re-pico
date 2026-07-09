@@ -3,7 +3,7 @@
 
 #include "address-map.hpp"
 
-namespace pwr {
+namespace hw::pwr {
 struct VoltageScaling {
     enum : u32 {
         BoostReady  = 0b0000'0000'0000'0000'0100'0000'0000'0000,
@@ -46,6 +46,6 @@ struct Regs {
     v32  pull_updown[18];  // 0x50 (PUCRA/PDCRA .. PUCRI/PDCRI)
 };
 static_assert(sizeof(Regs) == 0x94 + 4);
-} // namespace pwr
+} // namespace hw::pwr
 
-#define PWR_REGS (*(pwr::Regs*)(PWR_BASE))
+#define PWR_REGS (*(hw::pwr::Regs*)(PWR_BASE))

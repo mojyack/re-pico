@@ -3,7 +3,7 @@
 
 #include "address-map.hpp"
 
-namespace flash {
+namespace hw::flash {
 struct AccessControl {
     enum : u32 {
         Latency        = 0b0000'0000'0000'0000'0000'0000'0000'1111, // wait states, 4 required for 160MHz at VOS range 1
@@ -20,6 +20,6 @@ struct Regs {
     // the rest (program/erase, option bytes) is not implemented yet
 };
 static_assert(sizeof(Regs) == 0x0 + 4);
-} // namespace flash
+} // namespace hw::flash
 
-#define FLASH_REGS (*(flash::Regs*)(FLASH_REGS_BASE))
+#define FLASH_REGS (*(hw::flash::Regs*)(FLASH_REGS_BASE))
