@@ -1,4 +1,5 @@
 #pragma once
+#include "int.hpp"
 
 namespace noxx {
 // common types
@@ -43,4 +44,20 @@ using Conditional = decltype(conditional<c, A, B>())::Type;
 
 static_assert(is_same<Conditional<true, int, bool>, int>);
 static_assert(is_same<Conditional<false, int, bool>, bool>);
+
+// is_integral
+template <class T>
+constexpr auto is_integral = is_same<T, i8> ||
+                             is_same<T, i16> ||
+                             is_same<T, i32> ||
+                             is_same<T, i64> ||
+                             is_same<T, u8> ||
+                             is_same<T, u16> ||
+                             is_same<T, u32> ||
+                             is_same<T, u64> ||
+                             is_same<T, usize> ||
+                             false;
+
+template <class T>
+concept Integral = is_integral<T>;
 } // namespace noxx
