@@ -25,7 +25,8 @@ struct Vector {
     }
 
     auto reserve(const usize new_capacity) -> bool {
-#define error_act return false
+        constexpr auto error_value = false;
+
         if(new_capacity <= capacity) {
             return true;
         }
@@ -39,11 +40,11 @@ struct Vector {
         ptr      = new_ptr;
         capacity = new_capacity;
         return true;
-#undef error_act
     }
 
     auto resize(const usize new_size) -> bool {
-#define error_act return false
+        constexpr auto error_value = false;
+
         if(new_size <= length) {
             // shrink, no allocation
             for(auto i = new_size; i < length; i += 1) {
@@ -60,7 +61,6 @@ struct Vector {
         }
         length = new_size;
         return true;
-#undef error_act
     }
 
     auto clear() -> void {
@@ -74,14 +74,14 @@ struct Vector {
     }
 
     auto append(T item) -> bool {
-#define error_act return false
+        constexpr auto error_value = false;
+
         if(length >= capacity) {
             ensure(reserve(length == 0 ? 4 : length * 2)); // over allocation
         }
         new(ptr + length) T(move(item));
         length += 1;
         return true;
-#undef error_act
     }
 
     auto operator[](const usize i) -> T& {

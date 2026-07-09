@@ -7,7 +7,7 @@
 #include "noxx/assert.hpp"
 
 namespace {
-#define error_act return false
+constexpr auto error_value = false;
 
 auto live_count = 0;
 
@@ -81,13 +81,12 @@ auto nontrivial() -> bool {
     return true;
 }
 
-#undef error_act
-
 auto heap = std::array<std::byte, 8192>();
 } // namespace
 
 auto main() -> int {
-#define error_act return -1
+    constexpr auto error_value = -1;
+
     noxx::set_heap(heap.data(), heap.size());
     ensure(trivial());
     ensure(nontrivial());

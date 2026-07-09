@@ -7,7 +7,7 @@
 #include "noxx/string.hpp"
 
 namespace {
-#define error_act return false
+constexpr auto error_value = false;
 
 auto common_test(std::string data) -> bool {
     unwrap(str, noxx::String::create(data.data()));
@@ -42,13 +42,12 @@ auto large_string() -> bool {
     return true;
 }
 
-#undef error_act
-
 auto heap = std::array<std::byte, 4096>();
 } // namespace
 
 auto main() -> int {
-#define error_act return -1
+    constexpr auto error_value = -1;
+
     noxx::set_heap(heap.data(), heap.size());
     ensure(small_string());
     ensure(large_string());

@@ -30,7 +30,7 @@ auto String::data() const -> const char* {
 }
 
 auto String::resize(const usize new_size) -> bool {
-#define error_act return false
+    constexpr auto error_value = false;
     if(new_size <= size()) {
         // shrink, no allocation
         if(is_small()) {
@@ -63,7 +63,6 @@ auto String::resize(const usize new_size) -> bool {
     clear();
     *this = move(str);
     return true;
-#undef error_act
 }
 
 auto String::clear() -> void {
@@ -74,12 +73,12 @@ auto String::clear() -> void {
 }
 
 auto String::append(const StringView str) -> bool {
-#define error_act return false
+    constexpr auto error_value = false;
+
     const auto prev_size = size();
     ensure(resize(size() + str.size()));
     memcpy(data() + prev_size, str.data(), str.size());
     return true;
-#undef error_act
 }
 
 auto String::operator[](const usize i) -> char& {
@@ -113,7 +112,8 @@ String::~String() {
 }
 
 auto String::create(const usize capacity) -> Optional<String> {
-#define error_act return Optional<String>();
+    constexpr auto error_value = nullopt;
+
     ensure(capacity <= ((usize)-1 >> 1));
     auto ret = String();
     if(capacity > sizeof(Small::data)) {
@@ -123,11 +123,11 @@ auto String::create(const usize capacity) -> Optional<String> {
         ret.large.capacity = capacity;
     }
     return move(ret);
-#undef error_act
 }
 
 auto String::create(StringView str) -> Optional<String> {
-#define error_act return Optional<String>();
+    constexpr auto error_value = nullopt;
+
     const auto len = str.size();
     unwrap(ret, create(len + 1));
     memcpy(ret.data(), str.data(), len + 1);
@@ -137,6 +137,5 @@ auto String::create(StringView str) -> Optional<String> {
         ret.large.length = len;
     }
     return move(ret);
-#undef error_act
 }
 } // namespace noxx

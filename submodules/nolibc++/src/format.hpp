@@ -41,7 +41,8 @@ auto format_step(String& result) -> bool {
 
 template <comptime::String str, usize cursor, class Arg, class... Args>
 auto format_step(String& result, const Arg& arg, const Args&... args) -> bool {
-#define error_act return false
+    constexpr auto error_value = false;
+
     constexpr auto open = find_not_escaped<str, '{', cursor>;
     static_assert(open != comptime::npos, "too many format parameters");
 
@@ -56,18 +57,16 @@ auto format_step(String& result, const Arg& arg, const Args&... args) -> bool {
     ensure(format_segment<fmt>(result, arg));
     ensure((format_step<str, close + 1, Args...>(result, args...)));
     return true;
-#undef error_act
 }
 } // namespace fmt
 
 template <comptime::String str, class... Args>
 auto format(const Args&... args) -> Optional<String> {
-#define error_act \
-    return {}
+    constexpr auto error_value = nullopt;
+
     auto ret = String();
     ensure((fmt::format_step<str, 0, Args...>(ret, args...)));
     return ret;
-#undef error_act
 }
 } // namespace noxx
 

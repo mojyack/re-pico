@@ -1,7 +1,6 @@
 #pragma once
 #include "../array.hpp"
 #include "../comptime-string.hpp"
-#include "../int.hpp"
 #include "../math.hpp"
 #include "../string-view.hpp"
 #include "../string.hpp"
@@ -11,13 +10,6 @@
 
 namespace noxx::fmt {
 namespace integer {
-template <class T>
-concept format_supported_integrals = is_same<T, u8> ||
-                                     is_same<T, i16> || is_same<T, u16> ||
-                                     is_same<T, i32> || is_same<T, u32> ||
-                                     is_same<T, i64> || is_same<T, u64> ||
-                                     is_same<T, usize>;
-
 struct Params {
     char filler;
     int  width;
@@ -54,8 +46,9 @@ constexpr auto parse_params() -> Params {
 
 // params={} or {(base)} or {(filler,width,base)} where base=one of "dxb"
 template <comptime::String params>
-auto format_segment(String& result, const integer::format_supported_integrals auto var) -> bool {
-#define error_act return false
+auto format_segment(String& result, const Integral auto var) -> bool {
+    constexpr auto error_value = false;
+
     constexpr auto ps = integer::parse_params<params>();
 
     constexpr auto max_int_len = log((uintn<sizeof(var) * 8>)-1, ps.base) + 1 /*sign*/;
@@ -79,7 +72,6 @@ auto format_segment(String& result, const integer::format_supported_integrals au
     }
     ensure(result.append(StringView(buf.data + cursor + 1, buf.size() - cursor - 1)));
     return true;
-#undef error_act
 }
 } // namespace noxx::fmt
 

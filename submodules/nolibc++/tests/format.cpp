@@ -10,7 +10,7 @@ auto heap = std::array<std::byte, 4096>();
 }
 
 auto main() -> int {
-#define error_act return -1
+    constexpr auto error_value = -1;
 
     // comptime string
     static_assert(noxx::comptime::String("hello") == "hello");
@@ -52,5 +52,4 @@ auto main() -> int {
 
     std::println("pass");
     return 0;
-#undef error_act
 }

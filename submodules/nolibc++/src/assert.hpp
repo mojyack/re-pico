@@ -5,6 +5,7 @@
 #define NOXX_ASSERT_H
 #pragma push_macro("STRINGIFY")
 #pragma push_macro("TOSTRING")
+#pragma push_macro("error_act")
 #pragma push_macro("ensure")
 #pragma push_macro("unwrap")
 
@@ -13,6 +14,9 @@
 
 #undef TOSTRING
 #define TOSTRING(n) STRINGIFY(n)
+
+#undef error_act
+#define error_act return error_value
 
 #undef ensure
 #define ensure(cond)                               \
@@ -36,6 +40,7 @@
 #undef NOXX_ASSERT_H
 #pragma pop_macro("STRINGIFY")
 #pragma pop_macro("TOSTRING")
+#pragma pop_macro("error_act")
 #pragma pop_macro("ensure")
 #pragma pop_macro("unwrap")
 

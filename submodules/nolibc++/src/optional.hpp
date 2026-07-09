@@ -8,6 +8,11 @@
 #include "utility.hpp"
 
 namespace noxx {
+struct NullOpt {
+};
+
+constexpr auto nullopt = NullOpt();
+
 template <class T>
 struct Optional {
     alignas(T) char data[sizeof(T)];
@@ -37,6 +42,10 @@ struct Optional {
     }
 
     Optional() = default;
+
+    Optional(NullOpt) {
+    }
+
     Optional(T&& v) {
         emplace(move(v));
     }
