@@ -59,7 +59,8 @@ auto String::resize(const usize new_size) -> bool {
     // need allocation
     unwrap(str, create(new_size * 2)); // over allocation
     memcpy(str.data(), data(), size() + 1);
-    str.large.length = new_size;
+    str.large.length     = new_size;
+    str.data()[new_size] = '\0';
     clear();
     *this = move(str);
     return true;
