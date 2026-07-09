@@ -1,10 +1,11 @@
+#include <coop/coop.hpp>
 #include <halow/firmware.hpp>
 #include <halow/halow.hpp>
 #include <noxx/bits.hpp>
 #include <noxx/format.hpp>
 #include <noxx/malloc.hpp>
 
-#include "hal/sleep.hpp"
+#include "hal/time.hpp"
 #include "halow.hpp"
 #include "hw/gpio.hpp"
 #include "hw/m33.hpp"
@@ -32,6 +33,24 @@ auto printf(const Args&... args) -> bool {
     return true;
 }
 
+auto blink(const u32 pin, const u32 interval_ms, const u32 count) -> coop::Async<void> {
+    for(auto i = u32(0); i < count; i += 1) {
+        GPIOE_REGS.output_data ^= 1 << pin;
+        co_await coop::sleep_ms(interval_ms);
+    }
+}
+
+auto coop_demo() -> bool {
+    constexpr auto error_value = false;
+    auto           runner      = coop::Runner();
+    ensure(runner.push_task(blink(led_green, 100, 20)));
+    ensure(runner.push_task(blink(led_red, 250, 8)));
+    const auto begin = time::now();
+    ensure(runner.run());
+    printf<"elapsed {}us">(time::now() - begin);
+    return true;
+}
+
 auto entry() -> void {
     for(auto i = u32(0); i < &bss_end - &bss_start; i += 1) {
         (&bss_start)[i] = 0;
@@ -46,12 +65,13 @@ auto entry() -> void {
     GPIOE_REGS.bit_set_reset = 1 << led_blue;
     init_system();
     init_uart(921600);
+    time::start_systick();
 
     println("ready");
     print("> ");
 loop:
     if(!(LPUART1_REGS.status & hw::usart::Status::RXNotEmpty)) {
-        usleep(50000);
+        time::delay(50000);
         goto loop;
     }
     switch(u8(LPUART1_REGS.receive_data)) {
@@ -86,6 +106,10 @@ loop:
         } else {
             println("halow firmware booted");
         }
+    } break;
+    case 'c': {
+        ensure(coop_demo());
+        println("coop demo done");
     } break;
     case 'v': {
         const auto id  = FB(hw::dbgmcu::IDCode::DeviceID, DBGMCU_REGS.idcode);

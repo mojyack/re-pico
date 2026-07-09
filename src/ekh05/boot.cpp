@@ -3,6 +3,7 @@
 #include <noxx/assert.hpp>
 #include <noxx/bits.hpp>
 
+#include "hal/time.hpp"
 #include "hw/gpio.hpp"
 #include "hw/m33.hpp"
 #include "hw/usart.hpp"
@@ -81,6 +82,7 @@ auto wait_for_magic() -> void {
     enable_leds();
     init_system();
     init_uart(921600);
+    time::start_systick();
 
     while(true) {
 #pragma push_macro("error_act");
@@ -122,6 +124,7 @@ auto wait_for_magic() -> void {
         ensure(inflate({comp, comp_len}, {(u8*)fw_load_base, orig_len}), "inflate failed");
         println("jumping to firmware");
         wait_for_bit(LPUART1_REGS.status, hw::usart::Status::TXComplete);
+        time::stop_systick();
         launch(fw_load_base);
 #pragma pop_macro("error_act")
     }

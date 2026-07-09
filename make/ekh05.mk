@@ -13,11 +13,12 @@ EKH05_OBJS := $(OUT)/ekh05/main.o \
 			  $(OUT)/ekh05/halow.o \
 			  $(OUT)/ekh05/system.o \
 			  $(OUT)/ekh05/hal/gpio.o \
-			  $(OUT)/ekh05/hal/sleep.o \
+			  $(OUT)/ekh05/hal/time.o \
 			  $(OUT)/ekh05/hal/spi.o \
 			  $(OUT)/halow/halow.o \
 			  $(OUT)/halow/firmware.o \
 			  $(OUT)/halow-fw-blob.o \
+			  $(OUT)/coop/runner.o \
 			  $(OUT)/noxx/malloc.o \
 			  $(OUT)/noxx/string.o \
 			  $(OUT)/noxx/string-view.o \
@@ -40,7 +41,7 @@ $(OUT)/firmware-ram.elf: src/ekh05/link-ram.ld $(EKH05_OBJS)
 $(OUT)/boot.elf: src/ekh05/link-boot.ld \
 				 $(OUT)/ekh05/boot.o \
 				 $(OUT)/ekh05/system.o \
-				 $(OUT)/ekh05/hal/sleep.o \
+				 $(OUT)/ekh05/hal/time.o \
 				 $(OUT)/inflate.o \
 				 $(OUT)/abi.o
 	$(LD) $(LDFLAGS) -T $^ -o $@

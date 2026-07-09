@@ -1,6 +1,6 @@
 #include <noxx/bits.hpp>
 
-#include "hal/sleep.hpp"
+#include "hal/time.hpp"
 #include "hw/flash.hpp"
 #include "hw/gpio.hpp"
 #include "hw/pwr.hpp"
@@ -32,6 +32,9 @@ auto init_system() -> void {
     while(FB(hw::rcc::Config1::SysClockStatus, RCC_REGS.config1) != hw::rcc::Config1SysClockSource::MSIS) {
     }
     RCC_REGS.control &= ~hw::rcc::Control::PLL1On;
+    // PLL registers are write-protected until the PLL actually stops
+    while(RCC_REGS.control & hw::rcc::Control::PLL1Ready) {
+    }
     // raise core voltage to range 1 (required for 160MHz)
     RCC_REGS.ahb3_enable |= hw::rcc::AHB3Enable::PWR;
     PWR_REGS.voltage_scaling = BF(hw::pwr::VoltageScaling::VOS, hw::pwr::VoltageScalingVOS::Range1);
@@ -76,7 +79,7 @@ auto init_uart(const uint baud_rate) -> void {
                                  hw::gpio::mode(0, hw::gpio::Mode::Alternate) |
                                  hw::gpio::mode(1, hw::gpio::Mode::Alternate);
     // lpuart kernel clock = PCLK3 = 160MHz, baud = 256 * clock / brr
-    LPUART1_REGS.baud_rate = (u64(256) * sys_clock + baud_rate / 2) / baud_rate;
+    LPUART1_REGS.baud_rate = (u64(256) * time::cpu_hz + baud_rate / 2) / baud_rate;
     LPUART1_REGS.control1  = BF(hw::usart::Control1::EnableUART, 1) |
                              BF(hw::usart::Control1::EnableTX, 1) |
                              BF(hw::usart::Control1::EnableRX, 1);

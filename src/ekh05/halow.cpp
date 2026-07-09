@@ -1,4 +1,4 @@
-#include <hal/sleep.hpp>
+#include <hal/time.hpp>
 #include <noxx/assert.hpp>
 #include <noxx/bits.hpp>
 
@@ -61,7 +61,7 @@ auto prepare_pins_for_halow() -> bool {
     SPI2_REGS.control1 = hw::spi::Control1::InternalSS;
     // enabling right after configuration raises a spurious mode fault, let the SS state settle
     for(auto i = 0; i < 3; i += 1) {
-        usleep(10);
+        time::delay(10);
         SPI2_REGS.int_clear = hw::spi::Status::ModeFault;
         SPI2_REGS.config2 |= hw::spi::Config2::Master;
         SPI2_REGS.control1 |= hw::spi::Control1::Enable;

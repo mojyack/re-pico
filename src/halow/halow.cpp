@@ -2,8 +2,8 @@
 // the chip speaks the SD-over-SPI protocol (CMD52/CMD53 against a 64KB address
 // window) on SPI2, plus a few sideband GPIOs
 
-#include <hal/sleep.hpp>
 #include <hal/spi.hpp>
+#include <hal/time.hpp>
 #include <noxx/array.hpp>
 
 #include "crc.hpp"
@@ -327,9 +327,9 @@ auto init() -> bool {
 
     // hard reset
     gpio::set(reset, false);
-    usleep(5000);
+    time::delay(5000);
     gpio::set(reset, true);
-    usleep(20000);
+    time::delay(20000);
 
     send_training_seq();
     for(auto i = 0; i < 3; i += 1) {

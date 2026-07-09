@@ -23,6 +23,13 @@ static_assert(sizeof(Regs) == 0xC + 4);
 } // namespace hw::systick
 
 namespace hw::scb {
+struct IntControlState {
+    enum : u32 {
+        PendSTClr = 0b0000'0010'0000'0000'0000'0000'0000'0000,
+        PendSTSet = 0b0000'0100'0000'0000'0000'0000'0000'0000,
+    };
+};
+
 struct AppIntControlVectKey {
     enum : u32 {
         Key = 0x05FA,

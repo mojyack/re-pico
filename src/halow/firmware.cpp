@@ -1,4 +1,4 @@
-#include <hal/sleep.hpp>
+#include <hal/time.hpp>
 #include <halow-fw-blob.hpp>
 #include <inflate.hpp>
 #include <noxx/unique-ptr.hpp>
@@ -29,11 +29,11 @@ auto toggle_aon_latch() -> bool {
 
     unwrap(latch, read_u32(reg_aon_latch));
     ensure(write_u32(reg_aon_latch, latch & ~reg_aon_mask));
-    usleep(5000);
+    time::delay(5000);
     ensure(write_u32(reg_aon_latch, latch | reg_aon_mask));
-    usleep(5000);
+    time::delay(5000);
     ensure(write_u32(reg_aon_latch, latch & ~reg_aon_mask));
-    usleep(5000);
+    time::delay(5000);
     return true;
 }
 
@@ -46,7 +46,7 @@ auto firmware_trigger() -> bool {
     }
     ensure(toggle_aon_latch());
     ensure(write_u32(reg_msi, reg_msi_host_int));
-    usleep(5000);
+    time::delay(5000);
     return true;
 }
 
@@ -85,7 +85,7 @@ auto load_firmware() -> noxx::Optional<FirmwareInfo> {
             host_table_ptr = ptr;
             break;
         }
-        usleep(5000);
+        time::delay(5000);
     }
     ensure(host_table_ptr != 0);
 
