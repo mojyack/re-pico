@@ -45,6 +45,23 @@ using Conditional = decltype(conditional<c, A, B>())::Type;
 static_assert(is_same<Conditional<true, int, bool>, int>);
 static_assert(is_same<Conditional<false, int, bool>, bool>);
 
+// remove_reference
+template <class T>
+struct RemoveReferenceI : Tag<T> {};
+
+template <class T>
+struct RemoveReferenceI<T&> : Tag<T> {};
+
+template <class T>
+struct RemoveReferenceI<T&&> : Tag<T> {};
+
+template <class T>
+using RemoveReference = RemoveReferenceI<T>::Type;
+
+static_assert(is_same<RemoveReference<int&>, int>);
+static_assert(is_same<RemoveReference<int&&>, int>);
+static_assert(is_same<RemoveReference<int>, int>);
+
 // is_integral
 template <class T>
 constexpr auto is_integral = is_same<T, i8> ||
