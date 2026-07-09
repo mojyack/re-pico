@@ -19,14 +19,15 @@
 #define error_act return error_value
 
 #undef ensure
-#define ensure(cond)                               \
-    if(!(cond)) {                                  \
-        noxx::console_out("assertion failed at "); \
-        noxx::console_out(__FILE__);               \
-        noxx::console_out(":");                    \
-        noxx::console_out(TOSTRING(__LINE__));     \
-        noxx::console_out("\r\n");                 \
-        error_act;                                 \
+#define ensure(cond, ...)                               \
+    if(!(cond)) {                                       \
+        noxx::console_out("assertion failed at ");      \
+        noxx::console_out(__FILE__);                    \
+        noxx::console_out(":");                         \
+        noxx::console_out(TOSTRING(__LINE__));          \
+        __VA_OPT__(noxx::console_out(": " __VA_ARGS__);) \
+        noxx::console_out("\r\n");                      \
+        error_act;                                      \
     }
 
 #undef unwrap

@@ -1,5 +1,5 @@
 #include <hal/sleep.hpp>
-#include <halow_fw.hpp>
+#include <halow-fw-blob.hpp>
 #include <inflate.hpp>
 #include <noxx/unique-ptr.hpp>
 

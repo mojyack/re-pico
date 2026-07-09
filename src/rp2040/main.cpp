@@ -108,12 +108,12 @@ auto println(const char* const str) -> void {
 
 template <noxx::comptime::String str, class... Args>
 auto println(const Args&... args) -> bool {
-#define error_act return false
+    constexpr auto error_value = false;
+
     unwrap(raw, noxx::format<str>(noxx::move(args)...));
     print(raw.data());
     print("\r\n");
     return true;
-#undef error_act
 }
 
 auto entry() -> void {

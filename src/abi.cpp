@@ -40,6 +40,40 @@ auto __aeabi_idivmod(int numerator, int denominator) -> u64 {
     return u32(quotient) | u64(u32(numerator - quotient * denominator)) << 32;
 }
 
+// 64-bit unsigned long division (compiler-rt name): returns the quotient and,
+// when remainder is non-null, stores the remainder. plain restoring long division.
+auto __udivmoddi4(u64 numerator, u64 denominator, u64* remainder) -> u64 {
+    auto quotient = u64(0);
+    auto rem      = u64(0);
+    for(auto i = int(63); i >= 0; i -= 1) {
+        rem = (rem << 1) | ((numerator >> i) & 1);
+        if(rem >= denominator) {
+            rem -= denominator;
+            quotient |= u64(1) << i;
+        }
+    }
+    if(remainder != nullptr) {
+        *remainder = rem;
+    }
+    return quotient;
+}
+
+// __aeabi_uldivmod returns {quotient, remainder} in {r0:r1, r2:r3} -- a register
+// convention C++ can't express -- so marshal it around __udivmoddi4 in asm. the
+// remainder pointer is the (stack-passed) third argument. Thumb-1 clean (M0/M33).
+[[gnu::naked]] auto __aeabi_uldivmod(u64 /*numerator*/, u64 /*denominator*/) -> u64 {
+    asm volatile(
+        "push {r6, lr}\n"
+        "sub  sp, sp, #16\n"
+        "add  r6, sp, #8\n"    // r6 = &remainder
+        "str  r6, [sp]\n"      // pass it as the 3rd arg (r0:r1, r2:r3 hold the operands)
+        "bl   __udivmoddi4\n"  // quotient -> r0:r1
+        "ldr  r2, [sp, #8]\n"  // remainder -> r2:r3
+        "ldr  r3, [sp, #12]\n"
+        "add  sp, sp, #16\n"
+        "pop  {r6, pc}\n");
+}
+
 auto __aeabi_memcpy(void* dest, const void* src, usize size) -> void {
     noxx::memcpy(dest, src, size);
 }
