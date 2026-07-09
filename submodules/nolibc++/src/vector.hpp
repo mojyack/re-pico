@@ -1,6 +1,6 @@
 #pragma once
-#include "int.hpp"
 #include "malloc.hpp"
+#include "span.hpp"
 #include "utility.hpp"
 
 #include "assert.hpp"
@@ -103,6 +103,14 @@ struct Vector {
         return *this;
     }
 
+    operator Span<T>() {
+        return Span<T>{.data = ptr, .size = length};
+    }
+
+    operator Span<const T>() const {
+        return Span<T>{.data = ptr, .size = length};
+    }
+
     Vector() = default;
 
     Vector(Vector&& other) {
@@ -113,6 +121,9 @@ struct Vector {
         clear();
     }
 };
+
+template <class T>
+Span(Vector<T>&) -> Span<T>;
 } // namespace noxx
 
 #include "assert.hpp"
