@@ -9,11 +9,11 @@ SECTIONS {
     .boot2 : {
         *(.boot2)
         . = ORIGIN(flash) + 252;
-        *(.crc)
+        KEEP(*(.crc))
     } > flash
 
     .text : {
-        *(.vector)
+        KEEP(*(.vector))
         *(.text*)
     } > flash
 

@@ -1,20 +1,22 @@
-#include "hw/clocks.hpp"
-#include "hw/io-bank0.hpp"
-#include "hw/pll.hpp"
-#include "hw/resets.hpp"
-#include "hw/rom.hpp"
-#include "hw/rosc.hpp"
-#include "hw/sio.hpp"
-#include "hw/timer.hpp"
-#include "hw/uart.hpp"
-#include "hw/wd.hpp"
-#include "hw/xosc.hpp"
-#include "noxx/bits.hpp"
-#include "noxx/format.hpp"
-#include "noxx/malloc.hpp"
-#include "noxx/string.hpp"
+#include <coop/io.hpp>
+#include <coop/promise.hpp>
+#include <coop/task-handle.hpp>
+#include <coop/timer.hpp>
+#include <hal/uart.hpp>
+#include <noxx/bits.hpp>
+#include <noxx/format.hpp>
+#include <noxx/malloc.hpp>
+#include <noxx/string.hpp>
+#include <print.hpp>
+#include <split.hpp>
+#include <uart.hpp>
 
-#include "noxx/assert.hpp"
+#include "hal/uart.hpp"
+#include "hw/m0plus.hpp"
+#include "hw/rom.hpp"
+#include "system.hpp"
+
+#include <noxx/assert.hpp>
 
 // from linker script
 extern u32 heap_start;
@@ -26,157 +28,150 @@ extern u32 data_end;
 extern u32 data_load;
 
 namespace {
-auto wait_for_bit(cv32& reg, const u32 mask) -> void {
-    while(!(reg & mask)) {
-    }
-}
-
-auto unreset(const u32 reset_num) -> void {
-    RESETS_REGS_CLEAR.reset = reset_num;
-    wait_for_bit(RESETS_REGS.reset_done, reset_num);
-}
-
-auto enable_gpio_25() -> void {
-    unreset(resets::ResetNum::IOBank0);
-
-    IO_BANK0_REGS.status_control[25].control = BF(iobank0::GPIOControl::FuncSelect, iobank0::GPIOControlFuncSelect::SIO);
-
-    SIO_REGS.gpio_out_en_set = 1 << 25;
-}
-
-auto init_system() -> void {
-    // enable xosc
-    XOSC_REGS.control =
-        BF(xosc::Control::Enable, xosc::ControlEnable::Enable) |
-        BF(xosc::Control::FreqRange, xosc::ControlFreqRange::_1p15MHz);
-    wait_for_bit(XOSC_REGS.status, xosc::Status::Stable);
-    // enable system pll
-    unreset(resets::ResetNum::PLLSys);
-    PLL_SYS_REGS.feedback_div     = 100; // VCO clock = 12MHz * 100 = 1.2GHz
-    PLL_SYS_REGS_CLEAR.power_down = BF(pll::PowerDown::Core, 1) | BF(pll::PowerDown::VCO, 1);
-    wait_for_bit(PLL_SYS_REGS.control_and_status, pll::ControlAndStatus::Lock);
-    PLL_SYS_REGS.primary          = BF(pll::Primary::Postdiv1, 6) | BF(pll::Primary::Postdiv2, 2); // 1.2GHz / 6 / 2 = 100MHz
-    PLL_SYS_REGS_CLEAR.power_down = BF(pll::PowerDown::Postdiv, 1);
-    // setup clock generators
-    CLOCKS_REGS_SET.clock_ref.control = BF(clocks::RefClockControl::Source, clocks::RefClockSource::XOSC);
-    wait_for_bit(CLOCKS_REGS.clock_ref.selected, 1 << clocks::RefClockSource::XOSC);
-    CLOCKS_REGS_SET.clock_sys.control = BF(clocks::SysClockControl::Source, clocks::SysClockSource::Aux);
-    wait_for_bit(CLOCKS_REGS.clock_sys.selected, 1 << clocks::SysClockSource::Aux);
-    // stop rosc
-    ROSC_REGS_SET.control = BF(rosc::Control::Enable, rosc::ControlEnable::Disable);
-    // enable 64-bit timer
-    WATCHDOG_REGS_SET.tick = BF(wd::Tick::Cycles, 12); // 1us = 12cycles / 12MHz
-    unreset(resets::ResetNum::Timer);
-}
-
-auto read_time() -> u64 {
-    return TIMER_REGS.time_low_read | u64(TIMER_REGS.time_high_read) << 32;
-}
-
-auto usleep(u64 us) -> void {
-    auto start = read_time();
-    while(read_time() - start < us) {
-    }
-}
-
-struct Div {
-    u32 i;
-    u32 f;
-};
-
-constexpr auto calc_baud_rate_divisor(u32 clk_peri, u32 baud) -> Div {
-    // const auto div = 1. * clk_peri / (baud * (1 << 4));
-    // return {u32(div), u32(div * 64 + 0.5)};
-    const auto div = (1 << 3) * clk_peri / baud + 1;
-    return {div >> 7, (div & 0b1111111) >> 1};
-}
-
-auto print(const char* str) -> void {
-    while(*str != '\0') {
-        while(UART0_REGS.flag & uart::Flag::TXFIFOFull) {
-        }
-        UART0_REGS.data = *str;
-        str += 1;
-        // SIO_REGS.gpio_out_xor = 1 << 25;
-    }
-}
-
-auto println(const char* const str) -> void {
-    print(str);
-    print("\r\n");
-}
-
 template <noxx::comptime::String str, class... Args>
-auto println(const Args&... args) -> bool {
+auto printf_blocking(const Args&... args) -> bool {
     constexpr auto error_value = false;
-
     unwrap(raw, noxx::format<str>(noxx::move(args)...));
-    print(raw.data());
-    print("\r\n");
+    print_blocking(raw.data());
     return true;
 }
 
-auto entry() -> void {
+template <noxx::comptime::String str, class... Args>
+auto printf(const Args&... args) -> coop::Async<bool> {
+    constexpr auto error_value = false;
+    co_unwrap(raw, noxx::format<str>(noxx::move(args)...));
+    co_await print(raw.data());
+    co_return true;
+}
+
+auto dump_task_tree(const coop::Task& task, const int indent = 0) -> void {
+    for(auto i = 0; i < indent; i += 1) {
+        print_blocking(" ");
+    }
+    printf_blocking<"- task={} parent={} suspend={} obj={} zombie={}\n">((void*)&task, (void*)task.parent, task.suspend_reason.get_index(), task.objective_of, task.zombie);
+    for(auto i = usize(0); i < task.children.size(); i += 1) {
+        dump_task_tree(*task.children[i], indent + 2);
+    }
+}
+
+auto read_line() -> coop::Async<noxx::Optional<noxx::String>> {
+    constexpr auto error_value = noxx::nullopt;
+
+    auto line = noxx::String();
+    while(true) {
+        co_ensure(co_await coop::wait_for_io(uart::read_event));
+        auto c = u8();
+        co_ensure(uart::read({&c, 1}) == 1);
+        co_await uart::write_all({&c, 1});
+        if(c == '\r' || c == '\n') {
+            break;
+        } else {
+            line.append(c);
+        }
+    }
+    co_return line;
+}
+
+constexpr auto help = R"(commands:
+  help              print this message
+  reboot            reboot the board
+  bootsel           reboot into usb bootloader
+  version           print rom version and copyright
+  ps                print process tree
+  mem               dump heap chunks and usage
+)";
+
+auto handle_command(noxx::StringView line) -> coop::Async<bool> {
+    constexpr auto error_value = false;
+
+    co_unwrap(elms, split(line, " "));
+    if(elms.size() == 0) {
+        co_return true;
+    }
+
+    if(elms[0] == "help") {
+        co_await print(help);
+    } else if(elms[0] == "reboot") {
+        M0PLUS_REGS.app_int_and_reset_control =
+            BF(m0plus::AppIntAndResetControl::VECTKey, 0x05fa) |
+            BF(m0plus::AppIntAndResetControl::SysResetReq, 1);
+    } else if(elms[0] == "bootsel") {
+        ((rom::reset_to_usb_boot*)rom::lookup_func(rom::code::reset_to_usb_boot))(0, 0);
+    } else if(elms[0] == "version") {
+        co_await print((const char*)rom::lookup_data(rom::code::copyright_string));
+        co_await print("\n");
+        co_ensure(co_await printf<"rom version {}\n">(ROM.version));
+    } else if(elms[0] == "ps") {
+        dump_task_tree((co_await coop::reveal_runner())->root);
+    } else if(elms[0] == "mem") {
+        noxx::heap_walk(nullptr, [](void*, const void* addr, const usize size, const bool is_free) {
+            printf_blocking<"  {} {} bytes {}\n">(addr, size, is_free ? "free" : "used");
+        });
+        const auto stats = noxx::heap_stats();
+        co_ensure(co_await printf<"used {} bytes ({} chunks), free {} bytes ({} chunks), largest free {} bytes\n">(
+            stats.used, stats.used_chunks, stats.free, stats.free_chunks, stats.largest_free));
+    } else {
+        co_ensure(co_await printf<"invalid command '{}': try help\n">(elms[0]));
+    }
+
+    co_return true;
+}
+
+auto console_task_main() -> coop::Async<bool> {
+    constexpr auto error_value = false;
+loop:
+    co_await print("% ");
+    co_unwrap(line, co_await read_line());
+    co_await print("\n");
+    if(line.size() == 0) {
+        goto loop;
+    }
+    co_await handle_command(line);
+    goto loop;
+    co_return true;
+}
+
+// clang may optimize loops below to __aeabi_memclr/__aeabi_memcpy,
+// however rom::memcpy is not available yet.
+__attribute__((optnone)) auto init_memory() -> void {
     for(auto i = u32(0); i < &bss_end - &bss_start; i += 1) {
         (&bss_start)[i] = 0;
     }
     for(auto i = u32(0); i < &data_end - &data_start; i += 1) {
         (&data_start)[i] = (&data_load)[i];
     }
+}
+
+auto entry() -> void {
+    init_memory();
     rom::fops = (rom::FOps*)rom::lookup_data(rom::code::soft_float_table);
     if(ROM.version >= 2) {
         rom::dops = (rom::DOps*)rom::lookup_data(rom::code::soft_double_table);
     }
     const auto heap_end = (usize)&stack_top - 8 * 1024; // 8KB for stack
     noxx::set_heap(&heap_start, heap_end - (usize)&heap_start);
-    enable_gpio_25();
+    enable_led();
     init_system();
+    uart::init(115200);
 
-    // setup uart
-    IO_BANK0_REGS.status_control[0].control = BF(iobank0::GPIOControl::FuncSelect, iobank0::GPIOControlFuncSelect::UART);
-    IO_BANK0_REGS.status_control[1].control = BF(iobank0::GPIOControl::FuncSelect, iobank0::GPIOControlFuncSelect::UART);
-    CLOCKS_REGS_SET.clock_peri.control      = BF(clocks::PeriClockControl::Enable, 1);
-    unreset(resets::ResetNum::UART0);
-    constexpr auto div              = calc_baud_rate_divisor(100 * 1000 * 1000 /*clk_peri = clk_sys = 100MHz*/, 115200);
-    UART0_REGS.integer_baud_rate    = div.i;
-    UART0_REGS.fractional_baud_rate = div.f;
-    UART0_REGS.line_control =
-        BF(uart::LineControl::WordLength, 8 - 5) |
-        BF(uart::LineControl::EnableFIFO, 1);
-    UART0_REGS_SET.control = BF(uart::Control::EnableUART, 1); // TX and RX are default enabled
-
-    println("ready");
-    while(true) {
-        // SIO_REGS.gpio_out_xor = 1 << 25;
-        if(UART0_REGS.flag & uart::Flag::RXFIFOEmpty) {
-            usleep(50000);
-            continue;
-        }
-        switch(u8(UART0_REGS.data)) {
-        case 'x':
-            ((rom::reset_to_usb_boot*)rom::lookup_func(rom::code::reset_to_usb_boot))(0, 0);
-            break;
-        case 's': {
-            println<"{} {}">("hello", "world");
-        } break;
-        case 'v': {
-            println((char*)rom::lookup_data(rom::code::copyright_string));
-            println<"version {}">(ROM.version);
-        } break;
-        }
-    }
+    print_blocking("ready\n");
+loop:
+    auto runner = coop::Runner();
+    runner.push_task(console_task_main());
+    runner.run();
+    goto loop;
 }
 } // namespace
 
 extern "C" {
 [[noreturn]] auto default_int_handler() -> void {
-    enable_gpio_25();
+    enable_led();
     while(true) {
         for(auto i = 0; i < 50000; i += 1) {
-            SIO_REGS.gpio_out_set = 1 << 25;
+            led(true);
         }
         for(auto i = 0; i < 50000; i += 1) {
-            SIO_REGS.gpio_out_clear = 1 << 25;
+            led(false);
         }
     }
 }
@@ -208,7 +203,6 @@ __attribute__((weak, alias("default_int_handler"))) auto sio_irq_proc_1_handler(
 __attribute__((weak, alias("default_int_handler"))) auto clocks_irq_handler() -> void;
 __attribute__((weak, alias("default_int_handler"))) auto spi_0_irq_handler() -> void;
 __attribute__((weak, alias("default_int_handler"))) auto spi_1_irq_handler() -> void;
-__attribute__((weak, alias("default_int_handler"))) auto uart_0_irq_handler() -> void;
 __attribute__((weak, alias("default_int_handler"))) auto uart_1_irq_handler() -> void;
 __attribute__((weak, alias("default_int_handler"))) auto adc_irq_fifo_handler() -> void;
 __attribute__((weak, alias("default_int_handler"))) auto i2c_0_irq_handler() -> void;
@@ -254,7 +248,7 @@ __attribute__((section(".vector"))) void* vector[48] = {
     (void*)&clocks_irq_handler,
     (void*)&spi_0_irq_handler,
     (void*)&spi_1_irq_handler,
-    (void*)&uart_0_irq_handler,
+    (void*)&uart::uart0_handler,
     (void*)&uart_1_irq_handler,
     (void*)&adc_irq_fifo_handler,
     (void*)&i2c_0_irq_handler,
@@ -268,15 +262,3 @@ __attribute__((section(".vector"))) void* vector[48] = {
     nullptr,
 };
 }
-
-// noxx support
-namespace noxx {
-auto console_out(const char* ptr) -> bool {
-    print(ptr);
-    return true;
-}
-
-auto memcpy(void* dest, const void* src, usize size) -> void {
-    rom::memcpy((u8*)dest, (u8*)src, size);
-}
-} // namespace noxx
