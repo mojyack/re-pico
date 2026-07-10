@@ -4,12 +4,17 @@
 #include <noxx/bits.hpp>
 #include <noxx/format.hpp>
 #include <noxx/malloc.hpp>
+#include <print.hpp>
+#include <uart.hpp>
+#include <hal/uart.hpp>
 
 #include "hal/time.hpp"
+#include "hal/uart.hpp"
 #include "halow.hpp"
+#include "hw/dbgmcu.hpp"
 #include "hw/gpio.hpp"
-#include "hw/m33.hpp"
-#include "hw/usart.hpp"
+#include "hw/nvic.hpp"
+#include "hw/scb.hpp"
 #include "system.hpp"
 
 #include <noxx/assert.hpp>
@@ -40,6 +45,12 @@ auto blink(const u32 pin, const u32 interval_ms, const u32 count) -> coop::Async
     }
 }
 
+auto get_u8() -> u8 {
+    auto buf = noxx::Array<u8, 1>();
+    uart::read_all(buf);
+    return buf[0];
+}
+
 auto coop_demo() -> bool {
     constexpr auto error_value = false;
     auto           runner      = coop::Runner();
@@ -64,17 +75,13 @@ auto entry() -> void {
     enable_leds();
     GPIOE_REGS.bit_set_reset = 1 << led_blue;
     init_system();
-    init_uart(921600);
+    uart::init(921600);
     time::start_systick();
 
     println("ready");
     print("> ");
 loop:
-    if(!(LPUART1_REGS.status & hw::usart::Status::RXNotEmpty)) {
-        time::delay(50000);
-        goto loop;
-    }
-    switch(u8(LPUART1_REGS.receive_data)) {
+    switch(get_u8()) {
 #pragma push_macro("error_act")
 #define error_act break
     case 'x':
@@ -148,8 +155,7 @@ __attribute__((weak, alias("default_int_handler"))) auto debug_monitor_handler()
 __attribute__((weak, alias("default_int_handler"))) auto pend_sv_call_handler() -> void;
 __attribute__((weak, alias("default_int_handler"))) auto systick_handler() -> void;
 
-// external interrupts are unused for now, faults are enough
-__attribute__((section(".vector"))) void* vector[16] = {
+__attribute__((section(".vector"))) void* vector[16 + u32(hw::nvic::IRQ::LpUart1) + 1] = {
     (void*)&stack_top,
     (void*)&entry,
     (void*)&nmi_handler,
@@ -166,5 +172,6 @@ __attribute__((section(".vector"))) void* vector[16] = {
     nullptr,
     (void*)&pend_sv_call_handler,
     (void*)&systick_handler,
+    [16 + u32(hw::nvic::IRQ::LpUart1)] = (void*)&uart::lpuart1_handler,
 };
 }

@@ -1,4 +1,5 @@
 #pragma once
+#include <noxx/variant.hpp>
 #include <noxx/vector.hpp>
 
 #include "cohandle.hpp"
@@ -6,16 +7,23 @@
 #include "task-handle-pre.hpp"
 
 namespace coop {
-struct SuspendReason {
-    enum class Kind : u8 {
-        Running,
-        Timer,
-        Awaiting,
-    };
+struct IOEvent;
 
-    Kind kind          = Kind::Running;
-    u64  suspend_until = 0; // valid when kind == Timer
+struct Running {
 };
+
+struct ByTimer {
+    u64 suspend_until = 0;
+};
+
+struct ByIO {
+    IOEvent* event;
+};
+
+struct ByAwaiting {
+};
+
+using SuspendReason = noxx::Variant<Running, ByTimer, ByIO, ByAwaiting>;
 
 struct Task {
     std::coroutine_handle<> handle;

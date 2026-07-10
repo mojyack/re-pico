@@ -48,19 +48,24 @@ auto Runner::gather_resumable_tasks(Task& task, GatheringResult& result) -> bool
     }
 
     auto& reason = task.suspend_reason;
-    switch(reason.kind) {
-    case SuspendReason::Kind::Running:
+    switch(reason.get_index()) {
+    case SuspendReason::index_of<Running>:
         ensure(running_tasks.append(&task));
         break;
-    case SuspendReason::Kind::Timer:
-        if(reason.suspend_until <= result.now) {
+    case SuspendReason::index_of<ByTimer>: {
+        auto& r = reason.as<ByTimer>();
+        if(r.suspend_until <= result.now) {
             reason = {};
             ensure(running_tasks.append(&task));
-        } else if(reason.suspend_until < result.wake) {
-            result.wake = reason.suspend_until;
+        } else if(r.suspend_until < result.wake) {
+            result.wake = r.suspend_until;
         }
-        break;
-    case SuspendReason::Kind::Awaiting:
+    } break;
+    case SuspendReason::index_of<ByIO>: {
+        auto& r = reason.as<ByIO>();
+        // TODO
+    } break;
+    case SuspendReason::index_of<ByAwaiting>:
         break;
     }
     return true;
@@ -102,13 +107,18 @@ auto Runner::destroy_task(Task& task) -> bool {
     if(objective_task_finished.size() > 0 && !task.zombie /*do not notify twice*/) {
         objective_task_finished[task.objective_of] = true;
     }
-    if(task.suspend_reason.kind == SuspendReason::Kind::Awaiting || task.children.size() > 0) {
+    if(task.suspend_reason.get_index() == SuspendReason::index_of<ByAwaiting> || task.children.size() > 0) {
         // cannot destroy it for now
         task.zombie = true;
         return false;
     }
 
-    if(task.suspend_reason.kind == SuspendReason::Kind::Running && &task != current_task) {
+    switch(task.suspend_reason.get_index()) {
+    case SuspendReason::index_of<Running>: {
+        if(&task == current_task) {
+            // called from run_tasks
+            break;
+        }
         // called from cancel_task
         // we have to prevent the target task from being resumed
         for(auto i = usize(0); i < running_tasks.size(); i += 1) {
@@ -117,6 +127,7 @@ auto Runner::destroy_task(Task& task) -> bool {
                 break;
             }
         }
+    } break;
     }
 
     if(task.user_handle != nullptr) {
@@ -128,7 +139,7 @@ auto Runner::destroy_task(Task& task) -> bool {
         // but this marks as awaiting only the caller task of this function,
         // as current_task is not updated.
         // mark this task as awaiting to prevent scheduler to pick this up.
-        task.suspend_reason = {.kind = SuspendReason::Kind::Awaiting};
+        task.suspend_reason.emplace<ByAwaiting>();
         task.handle.destroy();
     }
 
@@ -177,7 +188,7 @@ auto Runner::join(TaskHandle& handle) -> bool {
 }
 
 auto Runner::delay(const u64 duration_us) -> void {
-    current_task->suspend_reason = {.kind = SuspendReason::Kind::Timer, .suspend_until = time::now() + duration_us};
+    current_task->suspend_reason.emplace<ByTimer>(time::now() + duration_us);
 }
 
 auto Runner::run() -> bool {

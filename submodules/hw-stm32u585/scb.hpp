@@ -3,25 +3,6 @@
 
 #include "address-map.hpp"
 
-namespace hw::systick {
-struct ControlAndStatus {
-    enum : u32 {
-        Enable         = 0b0000'0000'0000'0000'0000'0000'0000'0001,
-        TickInt        = 0b0000'0000'0000'0000'0000'0000'0000'0010,
-        CPUClockSource = 0b0000'0000'0000'0000'0000'0000'0000'0100, // 1 = CPU clock, 0 = CPU clock / 8
-        CountFlag      = 0b0000'0000'0000'0001'0000'0000'0000'0000, // cleared on read
-    };
-};
-
-struct Regs {
-    v32  control_and_status; // 0x00
-    v32  reload;             // 0x04 24-bit
-    v32  current;            // 0x08 write clears
-    cv32 calibration;        // 0x0C
-};
-static_assert(sizeof(Regs) == 0xC + 4);
-} // namespace hw::systick
-
 namespace hw::scb {
 struct IntControlState {
     enum : u32 {
@@ -64,21 +45,4 @@ struct Regs {
 static_assert(sizeof(Regs) == 0x2C + 4);
 } // namespace hw::scb
 
-namespace hw::dbgmcu {
-struct IDCode {
-    enum : u32 {
-        DeviceID = 0b0000'0000'0000'0000'0000'1111'1111'1111, // 0x482 = STM32U575/585
-        Revision = 0b1111'1111'1111'1111'0000'0000'0000'0000,
-    };
-};
-
-struct Regs {
-    cv32 idcode; // 0x00
-    v32  config; // 0x04
-};
-static_assert(sizeof(Regs) == 0x4 + 4);
-} // namespace hw::dbgmcu
-
-#define SYSTICK_REGS (*(hw::systick::Regs*)(PPB_BASE + 0xE010))
-#define SCB_REGS     (*(hw::scb::Regs*)(PPB_BASE + 0xED00))
-#define DBGMCU_REGS  (*(hw::dbgmcu::Regs*)(DBGMCU_BASE))
+#define SCB_REGS (*(hw::scb::Regs*)SCB_BASE)

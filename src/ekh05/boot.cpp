@@ -2,10 +2,14 @@
 #include <noxx/array.hpp>
 #include <noxx/assert.hpp>
 #include <noxx/bits.hpp>
+#include <print.hpp>
+#include <uart.hpp>
 
 #include "hal/time.hpp"
+#include "hal/uart.hpp"
 #include "hw/gpio.hpp"
-#include "hw/m33.hpp"
+#include "hw/nvic.hpp"
+#include "hw/scb.hpp"
 #include "hw/usart.hpp"
 #include "system.hpp"
 
@@ -27,17 +31,21 @@ static_assert(fw_load_base + fw_load_size == comp_buf_base);
 static_assert(comp_buf_base + comp_buf_size == 0x200b8000); // = ORIGIN(sram) of link-boot.ld
 
 auto get_u32() -> u32 {
-    const auto b0 = u32(uart_getc());
-    const auto b1 = u32(uart_getc());
-    const auto b2 = u32(uart_getc());
-    const auto b3 = u32(uart_getc());
-    return b0 | b1 << 8 | b2 << 16 | b3 << 24; // little-endian
+    auto buf = noxx::Array<u8, 4>();
+    uart::read_all(buf);
+    return u32(buf[0]) << 0 | u32(buf[1]) << 8 | u32(buf[2]) << 16 | u32(buf[3]) << 24;
 }
 
-auto crc32(const u8* data, const u32 len) -> u32 {
+auto get_u8() -> u8 {
+    auto buf = noxx::Array<u8, 1>();
+    uart::read_all(buf);
+    return buf[0];
+}
+
+auto crc32(noxx::Span<u8> buf) -> u32 {
     auto crc = u32(0xffffffff);
-    for(auto i = u32(0); i < len; i += 1) {
-        crc ^= data[i];
+    for(auto i = u32(0); i < buf.size; i += 1) {
+        crc ^= buf[i];
         for(auto k = u32(0); k < 8; k += 1) {
             crc = (crc >> 1) ^ (u32(0xedb88320) & (~(crc & 1) + 1)); // reflected CRC-32 poly
         }
@@ -51,7 +59,7 @@ auto wait_for_magic() -> void {
 
     auto matched = u32(0);
     while(matched < 4) {
-        const auto c = uart_getc();
+        const auto c = get_u8();
         if(c == magic[matched]) {
             matched += 1;
         } else {
@@ -81,7 +89,7 @@ auto wait_for_magic() -> void {
     SCB_REGS.vector_table_offset = u32(usize(&vector[0]));
     enable_leds();
     init_system();
-    init_uart(921600);
+    uart::init(921600);
     time::start_systick();
 
     while(true) {
@@ -102,28 +110,15 @@ auto wait_for_magic() -> void {
         const auto orig_len = get_u32();
         const auto want_crc = get_u32();
         ensure(comp_len <= comp_buf_size && orig_len <= fw_load_size, "image too large");
-        const auto comp = (u8*)comp_buf_base;
-        auto       got  = u32(0);
-        for(; got < comp_len; got += 1) {
-            auto spins = u32(0);
-            while(!(LPUART1_REGS.status & hw::usart::Status::RXNotEmpty)) {
-                if(LPUART1_REGS.status & hw::usart::Status::OverrunError) {
-                    LPUART1_REGS.int_clear = hw::usart::Status::OverrunError;
-                }
-                spins += 1;
-                if(spins > 30'000'000) {
-                    goto recv_done;
-                }
-            }
-            comp[got] = u8(LPUART1_REGS.receive_data);
-        }
-    recv_done:
+        auto comp = noxx::Span<u8>{(u8*)comp_buf_base, comp_len};
+        uart::read_all(comp);
         led(led_blue, false);
-        ensure(got == comp_len, "short receive");
-        ensure(crc32(comp, comp_len) == want_crc, "crc mismatch");
-        ensure(inflate({comp, comp_len}, {(u8*)fw_load_base, orig_len}), "inflate failed");
+        ensure(crc32(comp) == want_crc, "crc mismatch");
+        println("decompressing");
+        ensure(inflate(comp, {(u8*)fw_load_base, orig_len}), "inflate failed");
         println("jumping to firmware");
         wait_for_bit(LPUART1_REGS.status, hw::usart::Status::TXComplete);
+        uart::deinit();
         time::stop_systick();
         launch(fw_load_base);
 #pragma pop_macro("error_act")
@@ -155,7 +150,7 @@ __attribute__((weak, alias("default_int_handler"))) auto debug_monitor_handler()
 __attribute__((weak, alias("default_int_handler"))) auto pend_sv_call_handler() -> void;
 __attribute__((weak, alias("default_int_handler"))) auto systick_handler() -> void;
 
-__attribute__((section(".vector"))) void* vector[16] = {
+__attribute__((section(".vector"))) void* vector[16 + u32(hw::nvic::IRQ::LpUart1) + 1] = {
     (void*)&stack_top,
     (void*)&entry,
     (void*)&nmi_handler,
@@ -172,5 +167,6 @@ __attribute__((section(".vector"))) void* vector[16] = {
     nullptr,
     (void*)&pend_sv_call_handler,
     (void*)&systick_handler,
+    [16 + u32(hw::nvic::IRQ::LpUart1)] = (void*)&uart::lpuart1_handler,
 };
 }

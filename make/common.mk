@@ -3,9 +3,9 @@ CXX     := clang++ --target=arm-none-eabi
 LD      := ld.lld
 OBJCOPY := llvm-objcopy
 
-CFLAGS += -Os -nostdinc -Isrc
+CFLAGS += -Os -nostdinc -Isrc -ffunction-sections
 CXXFLAGS += $(CFLAGS) -std=c++23 -fno-exceptions -fno-rtti
-LDFLAGS += -nostdlib
+LDFLAGS += -nostdlib --gc-sections
 
 # common rules
 

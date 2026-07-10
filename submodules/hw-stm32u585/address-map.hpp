@@ -17,5 +17,8 @@
 #define LPUART1_BASE    0x4600'2400 // usart.hpp
 #define PWR_BASE        0x4602'0800 // pwr.hpp
 #define RCC_BASE        0x4602'0C00 // rcc.hpp
-#define PPB_BASE        0xE000'0000 // m33.hpp
-#define DBGMCU_BASE     0xE004'4000 // m33.hpp
+#define PPB_BASE        0xE000'0000
+#define SYSTICK_BASE    0xE000'E010 // systick.hpp
+#define NVIC_BASE       0xE000'E100 // nvic.hpp
+#define SCB_BASE        0xE000'ED00 // scb.hpp
+#define DBGMCU_BASE     0xE004'4000 // dbgmcu.hpp

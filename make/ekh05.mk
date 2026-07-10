@@ -3,7 +3,7 @@ OUT := build/ekh05
 
 include make/common.mk
 
-CFLAGS += -mcpu=cortex-m33 -mfloat-abi=soft -I$(OUT)
+CFLAGS += -mcpu=cortex-m33 -mfloat-abi=soft -I$(OUT) -Wno-c99-designator
 
 # UART bootloader download settings (see src/ekh05/boot.cpp, tools/send-firmware.py)
 SERIAL ?= /dev/ttyACM0
@@ -14,6 +14,7 @@ EKH05_OBJS := $(OUT)/ekh05/main.o \
 			  $(OUT)/ekh05/system.o \
 			  $(OUT)/ekh05/hal/gpio.o \
 			  $(OUT)/ekh05/hal/time.o \
+			  $(OUT)/ekh05/hal/uart.o \
 			  $(OUT)/ekh05/hal/spi.o \
 			  $(OUT)/halow/halow.o \
 			  $(OUT)/halow/firmware.o \
@@ -23,6 +24,8 @@ EKH05_OBJS := $(OUT)/ekh05/main.o \
 			  $(OUT)/noxx/string.o \
 			  $(OUT)/noxx/string-view.o \
 			  $(OUT)/abi.o \
+			  $(OUT)/print.o \
+			  $(OUT)/uart.o \
 			  $(OUT)/inflate.o
 
 all: $(OUT)/firmware.bin
@@ -42,7 +45,12 @@ $(OUT)/boot.elf: src/ekh05/link-boot.ld \
 				 $(OUT)/ekh05/boot.o \
 				 $(OUT)/ekh05/system.o \
 				 $(OUT)/ekh05/hal/time.o \
+				 $(OUT)/ekh05/hal/uart.o \
+				 $(OUT)/noxx/string-view.o \
+				 $(OUT)/noxx/string.o \
 				 $(OUT)/inflate.o \
+				 $(OUT)/uart.o \
+				 $(OUT)/print.o \
 				 $(OUT)/abi.o
 	$(LD) $(LDFLAGS) -T $^ -o $@
 

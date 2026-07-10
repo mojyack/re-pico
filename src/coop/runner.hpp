@@ -63,7 +63,7 @@ auto Runner::await(Generator generator) -> decltype(auto) {
         if(!pushed) {
             return Opt();
         }
-        current_task->suspend_reason = {.kind = SuspendReason::Kind::Awaiting};
+        current_task->suspend_reason.emplace<ByAwaiting>();
         const auto done              = run();
         current_task->suspend_reason = {};
         return !done || current_task->zombie ? Opt() : Opt(generator.await_resume());
@@ -71,7 +71,7 @@ auto Runner::await(Generator generator) -> decltype(auto) {
         if(!pushed) {
             return false;
         }
-        current_task->suspend_reason = {.kind = SuspendReason::Kind::Awaiting};
+        current_task->suspend_reason.emplace<ByAwaiting>();
         const auto done              = run();
         current_task->suspend_reason = {};
         return done && !current_task->zombie;

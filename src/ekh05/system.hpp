@@ -12,12 +12,3 @@ constexpr auto led_red   = u32(11); // PE11
 
 auto enable_leds() -> void;
 auto led(const u32 pin, const bool on) -> void;
-
-// uart
-auto init_uart(const uint baud_rate) -> void;
-auto uart_putc(const u8 c) -> void;
-auto uart_getc() -> u8;
-
-// print
-auto print(const char* str) -> void;
-auto println(const char* const str) -> void;
