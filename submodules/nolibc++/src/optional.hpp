@@ -41,6 +41,19 @@ struct Optional {
         return valid;
     }
 
+    auto operator=(Optional&& other) -> Optional& {
+        if(this == &other) {
+            return *this;
+        }
+        if(other.valid) {
+            emplace(move(*other));
+            other.clear();
+        } else {
+            clear();
+        }
+        return *this;
+    }
+
     Optional() = default;
 
     Optional(NullOpt) {
@@ -48,6 +61,10 @@ struct Optional {
 
     Optional(T&& v) {
         emplace(move(v));
+    }
+
+    Optional(Optional&& other) {
+        *this = noxx::forward<Optional&&>(other);
     }
 
     ~Optional() {
