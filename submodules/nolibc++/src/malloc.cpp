@@ -1,3 +1,4 @@
+#include "malloc.hpp"
 #include "bits.hpp"
 
 namespace noxx {
@@ -136,6 +137,31 @@ auto free(void* const ptr) -> void {
         merge(*prev, *chunk);
     }
 }
+
+auto heap_stats() -> HeapStats {
+    auto stats = HeapStats{};
+    // the last chunk (next == nullptr) is the tail sentinel, skip it
+    for(auto chunk = head; chunk != nullptr && chunk->next() != nullptr; chunk = chunk->next()) {
+        const auto size = chunk->size();
+        if(chunk->is_free()) {
+            stats.free += size;
+            stats.free_chunks += 1;
+            if(size > stats.largest_free) {
+                stats.largest_free = size;
+            }
+        } else {
+            stats.used += size;
+            stats.used_chunks += 1;
+        }
+    }
+    return stats;
+}
+
+auto heap_walk(void* const data, void (*const callback)(void* data, const void* addr, usize size, bool is_free)) -> void {
+    for(auto chunk = head; chunk != nullptr && chunk->next() != nullptr; chunk = chunk->next()) {
+        callback(data, chunk->data(), chunk->size(), chunk->is_free());
+    }
+}
 } // namespace noxx
 
 #if defined(NOXX_TEST)
@@ -144,34 +170,33 @@ auto free(void* const ptr) -> void {
 namespace noxx {
 auto dump_state() -> void {
     std::println("- chunk list");
-    for(auto chunk = head; chunk != nullptr; chunk = chunk->next()) {
-        std::println("chunk {}: next={} prev={} size={} free={}", (void*)chunk, (void*)chunk->next(), (void*)chunk->prev(), chunk->size(), chunk->is_free());
-    }
+    heap_walk(nullptr, [](void*, const void* addr, const usize size, const bool is_free) {
+        const auto chunk = (const u8*)addr - sizeof(ChunkHeader);
+        std::println("chunk {}: size={} free={}", (const void*)chunk, size, is_free);
+    });
 
     constexpr auto unit = alignof(ChunkHeader);
 
     std::print("- chunk graph(unit={}bytes)", unit);
 
-    auto       pos = 0;
-    const auto put = [&pos](const char c) {
-        if(pos % 16 == 0) {
-            std::print("\n{}  ", (void*)((u8*)head + pos * unit));
-        }
-        std::print("{}", c);
-        pos += 1;
-    };
-
-    for(auto chunk = head; chunk != nullptr; chunk = chunk->next()) {
+    auto pos = 0;
+    heap_walk(&pos, [](void* const data, const void*, const usize size, const bool is_free) {
+        auto&      pos = *(int*)data;
+        const auto put = [&pos](const char c) {
+            if(pos % 16 == 0) {
+                std::print("\n{}  ", (void*)((u8*)head + pos * unit));
+            }
+            std::print("{}", c);
+            pos += 1;
+        };
         for(auto i = 0uz; i < sizeof(ChunkHeader) / unit; i += 1) {
             put('H');
         }
-        if(chunk->next() != nullptr) {
-            const auto c = chunk->is_free() ? '.' : '*';
-            for(auto i = 0uz; i < chunk->size() / unit; i += 1) {
-                put(c);
-            }
+        const auto c = is_free ? '.' : '*';
+        for(auto i = 0uz; i < size / unit; i += 1) {
+            put(c);
         }
-    }
+    });
     std::println();
 }
 } // namespace noxx
