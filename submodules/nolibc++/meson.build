@@ -26,6 +26,13 @@ executable('vector-test',
   )
 )
 
+executable('variant-test',
+  files(
+    'tests/noxx-support.cpp',
+    'tests/variant.cpp',
+  )
+)
+
 executable('format-test',
   files(
     'src/malloc.cpp',
