@@ -50,6 +50,7 @@ struct String {
     auto data() const -> const char*;
     auto resize(usize new_size) -> bool;
     auto clear() -> void;
+    auto append(char c) -> bool;
     auto append(StringView str) -> bool;
 
     auto operator[](usize i) -> char&;

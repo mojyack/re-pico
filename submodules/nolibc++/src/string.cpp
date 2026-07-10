@@ -73,6 +73,15 @@ auto String::clear() -> void {
     small.length = 0b1000'0000;
 }
 
+auto String::append(char c) -> bool {
+    constexpr auto error_value = false;
+
+    const auto prev_size = size();
+    ensure(resize(size() + 1));
+    data()[prev_size] = c;
+    return true;
+}
+
 auto String::append(const StringView str) -> bool {
     constexpr auto error_value = false;
 
