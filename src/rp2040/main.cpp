@@ -19,13 +19,14 @@
 #include <noxx/assert.hpp>
 
 // from linker script
-extern u32 heap_start;
-extern u32 stack_top;
-extern u32 bss_start;
-extern u32 bss_end;
-extern u32 data_start;
-extern u32 data_end;
-extern u32 data_load;
+extern "C" void* vector[];
+extern u32       heap_start;
+extern u32       stack_top;
+extern u32       bss_start;
+extern u32       bss_end;
+extern u32       data_start;
+extern u32       data_end;
+extern u32       data_load;
 
 namespace {
 template <noxx::comptime::String str, class... Args>
@@ -144,7 +145,8 @@ __attribute__((optnone)) auto init_memory() -> void {
 
 auto entry() -> void {
     init_memory();
-    rom::fops = (rom::FOps*)rom::lookup_data(rom::code::soft_float_table);
+    M0PLUS_REGS.vector_table_offset = u32(usize(&vector[0])); // flash (boot2) or SRAM (bootloader), per link script
+    rom::fops                       = (rom::FOps*)rom::lookup_data(rom::code::soft_float_table);
     if(ROM.version >= 2) {
         rom::dops = (rom::DOps*)rom::lookup_data(rom::code::soft_double_table);
     }
@@ -152,7 +154,7 @@ auto entry() -> void {
     noxx::set_heap(&heap_start, heap_end - (usize)&heap_start);
     enable_led();
     init_system();
-    uart::init(115200);
+    uart::init(921600);
 
     print_blocking("ready\n");
 loop:
