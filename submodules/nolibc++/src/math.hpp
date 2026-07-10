@@ -20,8 +20,9 @@ constexpr auto max(const T& a) -> const T& {
 }
 
 template <class T, class... Args>
-constexpr auto max(const T& a, const T& b, const Args&&... args) -> const T& {
+constexpr auto max(const T& a, const T& b, const Args&... args) -> const T& {
     return max(a > b ? a : b, args...);
 }
 static_assert(max(1, 2, 3) == 3);
+static_assert(max(1, 4, 3, 2) == 4);
 } // namespace noxx
