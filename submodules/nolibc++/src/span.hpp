@@ -14,11 +14,15 @@ struct Span {
         };
     }
 
+    operator Span<const T>() {
+        return {data, size};
+    }
+
     constexpr auto operator[](const usize i) -> T& {
         return data[i];
     }
 
-    constexpr auto operator[](const usize i) const -> const T& {
+    constexpr auto operator[](const usize i) const -> T& {
         return data[i];
     }
 };
