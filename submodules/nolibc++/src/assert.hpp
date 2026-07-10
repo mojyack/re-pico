@@ -29,7 +29,7 @@
         noxx::console_out(":");                          \
         noxx::console_out(TOSTRING(__LINE__));           \
         __VA_OPT__(noxx::console_out(": " __VA_ARGS__);) \
-        noxx::console_out("\r\n");                       \
+        noxx::console_out("\n");                         \
         act;                                             \
     }
 

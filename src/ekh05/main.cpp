@@ -9,6 +9,7 @@
 #include <noxx/format.hpp>
 #include <noxx/malloc.hpp>
 #include <print.hpp>
+#include <split.hpp>
 #include <uart.hpp>
 
 #include "hal/time.hpp"
@@ -37,7 +38,7 @@ template <noxx::comptime::String str, class... Args>
 auto printf_blocking(const Args&... args) -> bool {
     constexpr auto error_value = false;
     unwrap(raw, noxx::format<str>(noxx::move(args)...));
-    println_blocking(raw.data());
+    print_blocking(raw.data());
     return true;
 }
 
@@ -45,7 +46,7 @@ template <noxx::comptime::String str, class... Args>
 auto printf(const Args&... args) -> coop::Async<bool> {
     constexpr auto error_value = false;
     co_unwrap(raw, noxx::format<str>(noxx::move(args)...));
-    co_await println(raw.data());
+    co_await print(raw.data());
     co_return true;
 }
 
@@ -59,55 +60,101 @@ auto dump_task_tree(const coop::Task& task, const int indent = 0) -> void {
     for(auto i = 0; i < indent; i += 1) {
         print_blocking(" ");
     }
-    printf_blocking<"- task={} parent={} suspend={} obj={} zombie={}">((void*)&task, (void*)task.parent, task.suspend_reason.get_index(), task.objective_of, task.zombie);
+    printf_blocking<"- task={} parent={} suspend={} obj={} zombie={}\n">((void*)&task, (void*)task.parent, task.suspend_reason.get_index(), task.objective_of, task.zombie);
     for(auto i = usize(0); i < task.children.size(); i += 1) {
         dump_task_tree(*task.children[i], indent + 2);
     }
 }
 
-auto coop_demo() -> bool {
-    struct S {
-        static auto blink(const u32 pin, const u32 interval_ms) -> coop::Async<void> {
-        loop:
-            GPIOE_REGS.output_data ^= 1 << pin;
-            co_await coop::sleep_ms(interval_ms);
-            goto loop;
+auto read_line() -> coop::Async<noxx::Optional<noxx::String>> {
+    constexpr auto error_value = noxx::nullopt;
+
+    auto line = noxx::String();
+    while(true) {
+        co_ensure(co_await coop::wait_for_io(uart::read_event));
+        auto c = u8();
+        co_ensure(uart::read({&c, 1}) == 1);
+        co_await uart::write_all({&c, 1});
+        if(c == '\r' || c == '\n') {
+            break;
+        } else {
+            line.append(c);
         }
+    }
+    co_return line;
+}
 
-        static auto echo() -> coop::Async<bool> {
-            constexpr auto error_value = false;
+constexpr auto help = R"(commands:
+  help              print this message
+  reboot            reboot the board
+  halow init|fw     control mm8108
+    halow init      initialize pins
+    halow fw        download firmware blob and bcf
+  version           print dbgmcu versions
+  ps                print process tree
+)";
 
-            auto buf = noxx::Array<u8, 4>();
-        loop:
-            co_ensure(co_await coop::wait_for_io(uart::read_event));
-            auto n = uart::read(buf);
-            while(n > 0) {
-                co_ensure(co_await printf<"read '{}'">(noxx::StringView((char*)buf.data, n)));
-                n = uart::read(buf);
-            }
-            goto loop;
-        }
-
-        static auto timer(const u32 time, noxx::Span<coop::TaskHandle> handles) -> coop::Async<void> {
-            co_await coop::sleep_ms(time);
-            for(auto i = 0uz; i < handles.size; i += 1) {
-                handles[i].cancel();
-            }
-        }
-    };
-
+auto handle_command(noxx::StringView line) -> coop::Async<bool> {
     constexpr auto error_value = false;
-    auto           runner      = coop::Runner();
-    auto           handles     = noxx::Array<coop::TaskHandle, 3>();
-    ensure(runner.push_task(S::blink(led_green, 100), &handles[0]));
-    ensure(runner.push_task(S::blink(led_red, 250), &handles[1]));
-    ensure(runner.push_task(S::echo(), &handles[2]));
-    ensure(runner.push_task(S::timer(5000, handles)));
-    const auto begin = time::now();
-    dump_task_tree(runner.root);
-    ensure(runner.run());
-    printf_blocking<"elapsed {}us">(time::now() - begin);
-    return true;
+
+    co_unwrap(elms, split(line, " "));
+    if(elms.size() == 0) {
+        co_return true;
+    }
+
+    if(elms[0] == "help") {
+        co_await print(help);
+    } else if(elms[0] == "reboot") {
+        SCB_REGS.app_int_control = BF(hw::scb::AppIntControl::VectKey, hw::scb::AppIntControlVectKey::Key) |
+                                   BF(hw::scb::AppIntControl::SysResetReq, 1);
+    } else if(elms[0] == "halow") {
+        co_ensure(elms.size() >= 2);
+        if(elms[1] == "init") {
+            co_ensure(prepare_pins_for_halow());
+            co_ensure(halow::init());
+            co_await print("halow initialized\n");
+        } else if(elms[1] == "fw") {
+            co_unwrap(id, halow::read_u32(halow::Reg::ChipID));
+            co_ensure(co_await printf<"halow chip id 0x{08x}\n">(id));
+            co_unwrap(fw, halow::load_firmware());
+            co_ensure(co_await printf<"halow host table 0x{08x} magic 0x{08x} fw {}.{}.{}\n">(
+                fw.host_table_ptr, fw.magic,
+                halow::version_major(fw.version),
+                halow::version_minor(fw.version),
+                halow::version_patch(fw.version)));
+            if(fw.magic != halow::host_magic) {
+                co_await print("halow magic mismatch, firmware did not boot\n");
+            } else {
+                co_await print("halow firmware booted\n");
+            }
+        } else {
+            co_ensure(false, "invalid halow command");
+        }
+    } else if(elms[0] == "version") {
+        const auto id  = FB(hw::dbgmcu::IDCode::DeviceID, DBGMCU_REGS.idcode);
+        const auto rev = FB(hw::dbgmcu::IDCode::Revision, DBGMCU_REGS.idcode);
+        co_ensure(co_await printf<"idcode 0x{04x} revision 0x{04x}\n">(id, rev));
+    } else if(elms[0] == "ps") {
+        dump_task_tree((co_await coop::reveal_runner())->root);
+    } else {
+        co_ensure(co_await printf<"invalid command '{}': try help\n">(elms[0]));
+    }
+
+    co_return true;
+}
+
+auto console_task_main() -> coop::Async<bool> {
+    constexpr auto error_value = false;
+loop:
+    co_await print("% ");
+    co_unwrap(line, co_await read_line());
+    co_await print("\n");
+    if(line.size() == 0) {
+        goto loop;
+    }
+    co_await handle_command(line);
+    goto loop;
+    co_return true;
 }
 
 auto entry() -> void {
@@ -126,54 +173,11 @@ auto entry() -> void {
     uart::init(921600);
     time::start_systick();
 
-    println_blocking("ready");
-    print_blocking("> ");
+    print_blocking("ready\n");
 loop:
-    switch(get_u8()) {
-#pragma push_macro("error_act")
-#define error_act break
-    case 'x':
-        SCB_REGS.app_int_control = BF(hw::scb::AppIntControl::VectKey, hw::scb::AppIntControlVectKey::Key) |
-                                   BF(hw::scb::AppIntControl::SysResetReq, 1);
-        break;
-    case 'l':
-        GPIOE_REGS.output_data ^= 1 << led_green;
-        break;
-    case 's': {
-        printf_blocking<"{} {}">("hello", "world");
-    } break;
-    case 'h': {
-        ensure(prepare_pins_for_halow());
-        ensure(halow::init());
-        println_blocking("halow initialized");
-    } break;
-    case 'f': {
-        unwrap(id, halow::read_u32(halow::Reg::ChipID));
-        printf_blocking<"halow chip id 0x{08x}">(id);
-        unwrap(fw, halow::load_firmware());
-        printf_blocking<"halow host table 0x{08x} magic 0x{08x} fw {}.{}.{}">(
-            fw.host_table_ptr, fw.magic,
-            halow::version_major(fw.version),
-            halow::version_minor(fw.version),
-            halow::version_patch(fw.version));
-        if(fw.magic != halow::host_magic) {
-            println_blocking("halow magic mismatch, firmware did not boot");
-        } else {
-            println_blocking("halow firmware booted");
-        }
-    } break;
-    case 'c': {
-        ensure(coop_demo());
-        println_blocking("coop demo done");
-    } break;
-    case 'v': {
-        const auto id  = FB(hw::dbgmcu::IDCode::DeviceID, DBGMCU_REGS.idcode);
-        const auto rev = FB(hw::dbgmcu::IDCode::Revision, DBGMCU_REGS.idcode);
-        printf_blocking<"idcode 0x{04x} revision 0x{04x}">(id, rev);
-    } break;
-#pragma pop_macro("error_act")
-    }
-    print_blocking("> ");
+    auto runner = coop::Runner();
+    runner.push_task(console_task_main());
+    runner.run();
     goto loop;
 }
 } // namespace

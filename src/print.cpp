@@ -2,22 +2,32 @@
 #include <print.hpp>
 #include <uart.hpp>
 
-auto print_blocking(const noxx::StringView str) -> void {
-    auto span = noxx::Span<const u8>{(const u8*)str.data(), str.size() + 1};
-    uart::write_blocking(span);
-}
-
-auto println_blocking(const noxx::StringView str) -> void {
-    print_blocking(str);
-    print_blocking("\r\n");
+auto print_blocking(noxx::StringView str) -> void {
+    while(str.size() != 0) {
+        const auto nl  = str.find("\n");
+        const auto run = nl < 0 ? str : str.substr(0, nl);
+        if(run.size() != 0) {
+            uart::write_blocking({(const u8*)run.data(), run.size()});
+        }
+        if(nl < 0) {
+            break;
+        }
+        uart::write_blocking({(const u8*)"\r\n", 2});
+        str = str.substr(nl + 1);
+    }
 }
 
 auto print(noxx::StringView str) -> coop::Async<void> {
-    auto span = noxx::Span<const u8>{(const u8*)str.data(), str.size() + 1};
-    co_await uart::write_all(span);
-}
-
-auto println(noxx::StringView str) -> coop::Async<void> {
-    co_await print(str);
-    co_await print("\r\n");
+    while(str.size() != 0) {
+        const auto nl  = str.find("\n");
+        const auto run = nl < 0 ? str : str.substr(0, nl);
+        if(run.size() != 0) {
+            co_await uart::write_all({(const u8*)run.data(), run.size()});
+        }
+        if(nl < 0) {
+            break;
+        }
+        co_await uart::write_all({(const u8*)"\r\n", 2});
+        str = str.substr(nl + 1);
+    }
 }

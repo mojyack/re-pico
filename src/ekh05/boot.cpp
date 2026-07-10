@@ -101,7 +101,7 @@ auto wait_for_magic() -> void {
         led(led_red, false);
         led(led_blue, false);
         led(led_green, true); // ready
-        println_blocking("\r\nbootloader");
+        print_blocking("\nbootloader\n");
 
         wait_for_magic();
         led(led_green, false);
@@ -114,9 +114,9 @@ auto wait_for_magic() -> void {
         uart::read_blocking(comp);
         led(led_blue, false);
         ensure(crc32(comp) == want_crc, "crc mismatch");
-        println_blocking("decompressing");
+        print_blocking("decompressing\n");
         ensure(inflate(comp, {(u8*)fw_load_base, orig_len}), "inflate failed");
-        println_blocking("jumping to firmware");
+        print_blocking("jumping to firmware\n");
         wait_for_bit(LPUART1_REGS.status, hw::usart::Status::TXComplete);
         uart::deinit();
         time::stop_systick();

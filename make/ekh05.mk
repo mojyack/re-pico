@@ -24,6 +24,7 @@ EKH05_OBJS := $(OUT)/ekh05/main.o \
 			  $(OUT)/noxx/string.o \
 			  $(OUT)/noxx/string-view.o \
 			  $(OUT)/abi.o \
+			  $(OUT)/split.o \
 			  $(OUT)/print.o \
 			  $(OUT)/uart.o \
 			  $(OUT)/inflate.o
