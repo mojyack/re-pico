@@ -1,3 +1,4 @@
+#include <coop/io.hpp>
 #include <hal/uart.hpp>
 #include <intrinsics.hpp>
 #include <noxx/bits.hpp>
@@ -15,7 +16,7 @@ namespace {
 constexpr auto lpuart1_irq = u32(hw::nvic::IRQ::LpUart1);
 constexpr auto rx_buf_size = usize(256); // must be a power of two
 
-// single-producer (ISR) / single-consumer (uart_getc*) ring buffer.
+// single-producer (ISR) / single-consumer (read()) ring buffer.
 // empty when head == tail, full when (head + 1) % size == tail.
 volatile u8   rx_buf[rx_buf_size];
 volatile auto rx_head = usize(0); // advanced by the ISR
@@ -47,74 +48,32 @@ auto init(const uint baud_rate) -> void {
 }
 
 auto deinit() -> void {
-    // stop the rx interrupt so it cannot fire through a stale vector table while
-    // control is handed to freshly launched firmware (which re-runs init_uart)
     NVIC_REGS.clear_enable[lpuart1_irq / 32] = 1 << (lpuart1_irq % 32);
     LPUART1_REGS.control1 &= ~BF(hw::usart::Control1::RXNotEmptyInt, 1);
 }
 
-auto putc(const u8 c) -> void {
-    wait_for_bit(LPUART1_REGS.status, hw::usart::Status::TXEmpty);
-    LPUART1_REGS.transmit_data = c;
-}
-
-auto getc() -> u8 {
-    while(true) {
-        // mask interrupts so the empty check and the WFI cannot race the ISR,
-        // otherwise a byte arriving in the gap would leave us sleeping forever
-        asm volatile("cpsid i" ::: "memory");
-        if(rx_head != rx_tail) {
-            const auto c = rx_buf[rx_tail];
-            rx_tail      = (rx_tail + 1) % rx_buf_size;
-            asm volatile("cpsie i" ::: "memory");
-            return c;
-        }
-        // WFI wakes on the pending interrupt even with PRIMASK set; the ISR runs
-        // once we unmask, then the next loop iteration picks up the byte.
-        // CPSIE is not self-synchronising on Cortex-M: without the ISB the pending
-        // ISR is not taken before the cpsid at the loop top re-masks it, so the
-        // rx interrupt would stay pending forever and no byte is ever received.
-        asm volatile("wfi" ::: "memory");
-        asm volatile("cpsie i" ::: "memory");
-        asm volatile("isb" ::: "memory");
-    }
-}
-
-auto getc_timeout(const u64 timeout_us, u8& out) -> bool {
-    const auto deadline = time::now() + timeout_us;
-    while(true) {
-        asm volatile("cpsid i" ::: "memory");
-        if(rx_head != rx_tail) {
-            out     = rx_buf[rx_tail];
-            rx_tail = (rx_tail + 1) % rx_buf_size;
-            asm volatile("cpsie i" ::: "memory");
-            return true;
-        }
-        if(time::now() >= deadline) {
-            asm volatile("cpsie i" ::: "memory");
-            return false;
-        }
-        asm volatile("wfi" ::: "memory"); // systick wakes us at least every 1ms to recheck
-        asm volatile("cpsie i" ::: "memory");
-        asm volatile("isb" ::: "memory"); // take the pending rx ISR before the cpsid re-masks it
-    }
-}
-
 auto lpuart1_handler() -> void {
-    while(LPUART1_REGS.status & hw::usart::Status::RXNotEmpty) {
-        const auto c    = u8(LPUART1_REGS.receive_data);
-        const auto next = (rx_head + 1) % rx_buf_size;
-        if(next != rx_tail) {
-            rx_buf[rx_head] = c;
-            rx_head         = next;
+    if(LPUART1_REGS.status & hw::usart::Status::RXNotEmpty) {
+        while(LPUART1_REGS.status & hw::usart::Status::RXNotEmpty) {
+            const auto c    = u8(LPUART1_REGS.receive_data);
+            const auto next = (rx_head + 1) % rx_buf_size;
+            if(next != rx_tail) {
+                rx_buf[rx_head] = c;
+                rx_head         = next;
+            } else {
+                // buffer full, drop the byte
+            }
         }
-        // buffer full, drop the byte
+        read_event.notify();
+    }
+    if((LPUART1_REGS.status & hw::usart::Status::TXEmpty) &&
+       (LPUART1_REGS.control1 & hw::usart::Control1::TXEmptyInt)) {
+        LPUART1_REGS.control1 &= ~BF(hw::usart::Control1::TXEmptyInt, 1);
+        write_event.notify();
     }
     if(LPUART1_REGS.status & hw::usart::Status::OverrunError) {
         LPUART1_REGS.int_clear = hw::usart::Status::OverrunError;
     }
-    read_event.available         = true;
-    coop::any_io_event_available = true;
 }
 
 auto read(const noxx::Span<u8> buf) -> usize {
@@ -136,5 +95,19 @@ auto write(const noxx::Span<const u8> buf) -> usize {
         n += 1;
     }
     return n;
+}
+
+auto read_available() -> bool {
+    return rx_head != rx_tail;
+}
+
+auto write_available() -> bool {
+    __disable_irq();
+    const auto empty = LPUART1_REGS.status & hw::usart::Status::TXEmpty;
+    if(!empty) {
+        LPUART1_REGS.control1 |= BF(hw::usart::Control1::TXEmptyInt, 1);
+    }
+    __enable_irq();
+    return empty;
 }
 } // namespace uart

@@ -32,13 +32,13 @@ static_assert(comp_buf_base + comp_buf_size == 0x200b8000); // = ORIGIN(sram) of
 
 auto get_u32() -> u32 {
     auto buf = noxx::Array<u8, 4>();
-    uart::read_all(buf);
+    uart::read_blocking(buf);
     return u32(buf[0]) << 0 | u32(buf[1]) << 8 | u32(buf[2]) << 16 | u32(buf[3]) << 24;
 }
 
 auto get_u8() -> u8 {
     auto buf = noxx::Array<u8, 1>();
-    uart::read_all(buf);
+    uart::read_blocking(buf);
     return buf[0];
 }
 
@@ -101,7 +101,7 @@ auto wait_for_magic() -> void {
         led(led_red, false);
         led(led_blue, false);
         led(led_green, true); // ready
-        println("\r\nbootloader");
+        println_blocking("\r\nbootloader");
 
         wait_for_magic();
         led(led_green, false);
@@ -111,12 +111,12 @@ auto wait_for_magic() -> void {
         const auto want_crc = get_u32();
         ensure(comp_len <= comp_buf_size && orig_len <= fw_load_size, "image too large");
         auto comp = noxx::Span<u8>{(u8*)comp_buf_base, comp_len};
-        uart::read_all(comp);
+        uart::read_blocking(comp);
         led(led_blue, false);
         ensure(crc32(comp) == want_crc, "crc mismatch");
-        println("decompressing");
+        println_blocking("decompressing");
         ensure(inflate(comp, {(u8*)fw_load_base, orig_len}), "inflate failed");
-        println("jumping to firmware");
+        println_blocking("jumping to firmware");
         wait_for_bit(LPUART1_REGS.status, hw::usart::Status::TXComplete);
         uart::deinit();
         time::stop_systick();

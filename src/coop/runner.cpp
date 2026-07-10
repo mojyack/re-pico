@@ -1,5 +1,6 @@
 #include <hal/time.hpp>
 
+#include "io-pre.hpp"
 #include "runner-pre.hpp"
 
 #include <noxx/assert.hpp>
@@ -49,7 +50,7 @@ auto Runner::gather_resumable_tasks(Task& task, GatheringResult& result) -> bool
 
     auto& reason = task.suspend_reason;
     switch(reason.get_index()) {
-    case SuspendReason::index_of<Running>:
+    case SuspendReason::invalid_index:
         ensure(running_tasks.append(&task));
         break;
     case SuspendReason::index_of<ByTimer>: {
@@ -63,7 +64,13 @@ auto Runner::gather_resumable_tasks(Task& task, GatheringResult& result) -> bool
     } break;
     case SuspendReason::index_of<ByIO>: {
         auto& r = reason.as<ByIO>();
-        // TODO
+        if(r.event->available()) {
+            r.event->waiter = nullptr;
+            reason          = {};
+            ensure(running_tasks.append(&task));
+        } else {
+            result.poll_io = true;
+        }
     } break;
     case SuspendReason::index_of<ByAwaiting>:
         break;
@@ -114,7 +121,7 @@ auto Runner::destroy_task(Task& task) -> bool {
     }
 
     switch(task.suspend_reason.get_index()) {
-    case SuspendReason::index_of<Running>: {
+    case SuspendReason::invalid_index: {
         if(&task == current_task) {
             // called from run_tasks
             break;
@@ -127,6 +134,10 @@ auto Runner::destroy_task(Task& task) -> bool {
                 break;
             }
         }
+    } break;
+    case SuspendReason::index_of<ByIO>: {
+        auto& r         = task.suspend_reason.as<ByIO>();
+        r.event->waiter = nullptr;
     } break;
     }
 
@@ -191,6 +202,11 @@ auto Runner::delay(const u64 duration_us) -> void {
     current_task->suspend_reason.emplace<ByTimer>(time::now() + duration_us);
 }
 
+auto Runner::io_wait(IOEvent& event) -> void {
+    event.waiter = current_task;
+    current_task->suspend_reason.emplace<ByIO>(&event);
+}
+
 auto Runner::run() -> bool {
     constexpr auto error_value = false;
 
@@ -211,6 +227,8 @@ loop:
         goto loop;
     }
 
+    any_io_event_available = false;
+
     auto result = GatheringResult{.now = time::now()};
     ensure(gather_resumable_tasks(root, result));
 
@@ -219,9 +237,15 @@ loop:
         goto loop;
     }
 
-    ensure(result.wake != u64(-1), "deadlock, no resumable task");
-    while(time::now() < result.wake) {
-        // idle until the next timer expires
+    if(result.poll_io) {
+        while(time::now() < result.wake && !any_io_event_available) {
+            // idle until the next timer expires or io events
+        }
+    } else {
+        ensure(result.wake != u64(-1), "deadlock, no resumable task");
+        while(time::now() < result.wake) {
+            // idle until the next timer expires
+        }
     }
     goto loop;
 }

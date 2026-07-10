@@ -9,9 +9,6 @@
 namespace coop {
 struct IOEvent;
 
-struct Running {
-};
-
 struct ByTimer {
     u64 suspend_until = 0;
 };
@@ -23,7 +20,7 @@ struct ByIO {
 struct ByAwaiting {
 };
 
-using SuspendReason = noxx::Variant<Running, ByTimer, ByIO, ByAwaiting>;
+using SuspendReason = noxx::Variant<ByTimer, ByIO, ByAwaiting>;
 
 struct Task {
     std::coroutine_handle<> handle;
@@ -39,8 +36,9 @@ struct Task {
 struct Runner {
     // private
     struct GatheringResult {
-        u64 now;
-        u64 wake = u64(-1);
+        u64  now;
+        u64  wake    = u64(-1);
+        bool poll_io = false;
     };
 
     Task                root;
@@ -62,6 +60,7 @@ struct Runner {
     // for awaiters
     auto join(TaskHandle& handle) -> bool;
     auto delay(u64 duration_us) -> void;
+    auto io_wait(IOEvent& event) -> void;
 
     // public
     template <CoGeneratorLike Generator>

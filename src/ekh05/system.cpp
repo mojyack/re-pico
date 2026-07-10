@@ -69,7 +69,7 @@ auto init_system() -> void {
 // noxx support
 namespace noxx {
 auto console_out(const char* ptr) -> bool {
-    print(ptr);
+    print_blocking(ptr);
     return true;
 }
 
