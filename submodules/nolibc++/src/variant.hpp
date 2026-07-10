@@ -7,14 +7,15 @@
 namespace noxx {
 template <class... Ts>
 class Variant {
+  public:
+    static constexpr auto invalid_index = usize(-1);
+
   private:
     template <usize n>
     using E = NthType<n, Ts...>;
 
     template <class T>
     static constexpr auto false_v = false;
-
-    static constexpr auto invalid_index = usize(-1);
 
     alignas(Ts...) char data[max(sizeof(Ts)...)];
     usize index = invalid_index;
