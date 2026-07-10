@@ -62,6 +62,46 @@ static_assert(is_same<RemoveReference<int&>, int>);
 static_assert(is_same<RemoveReference<int&&>, int>);
 static_assert(is_same<RemoveReference<int>, int>);
 
+// remove_cv
+template <class T>
+struct RemoveCvI : Tag<T> {};
+
+template <class T>
+struct RemoveCvI<const T> : Tag<T> {};
+
+template <class T>
+struct RemoveCvI<volatile T> : Tag<T> {};
+
+template <class T>
+struct RemoveCvI<const volatile T> : Tag<T> {};
+
+template <class T>
+using RemoveCv = RemoveCvI<T>::Type;
+
+static_assert(is_same<RemoveCv<const int>, int>);
+static_assert(is_same<RemoveCv<const volatile int>, int>);
+
+// remove_cvref
+template <class T>
+using RemoveCvRef = RemoveCv<RemoveReference<T>>;
+
+static_assert(is_same<RemoveCvRef<const int&>, int>);
+static_assert(is_same<RemoveCvRef<int&&>, int>);
+
+// tuple_element (for type packs)
+template <usize n, class... Ts>
+using NthType = __type_pack_element<n, Ts...>;
+
+static_assert(is_same<NthType<0, int, bool>, int>);
+static_assert(is_same<NthType<1, int, bool>, bool>);
+
+// is_constructible
+template <class T, class... Args>
+constexpr auto is_constructible = __is_constructible(T, Args...);
+
+static_assert(is_constructible<int, int>);
+static_assert(!is_constructible<int, int*>);
+
 // is_integral
 template <class T>
 constexpr auto is_integral = is_same<T, i8> ||
