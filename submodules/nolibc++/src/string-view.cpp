@@ -24,6 +24,30 @@ auto StringView::clear() -> void {
     length = 0;
 }
 
+auto StringView::find(const StringView key, const int pos) const -> int {
+    if(key.size() > size()) {
+        return -1;
+    }
+    const auto last = size() - key.size();
+    for(auto i = usize(pos); i <= last; i += 1) {
+        auto found = true;
+        for(auto j = usize(0); j < key.size(); j += 1) {
+            if((*this)[i + j] != key[j]) {
+                found = false;
+                break;
+            }
+        }
+        if(found) {
+            return int(i);
+        }
+    }
+    return -1;
+}
+
+auto StringView::substr(const usize offset, const int count) const -> StringView {
+    return StringView(ptr + offset, count >= 0 ? count : length - offset);
+}
+
 auto StringView::operator[](usize i) const -> char {
     return data()[i];
 }
