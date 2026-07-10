@@ -92,6 +92,7 @@ constexpr auto help = R"(commands:
     halow fw        download firmware blob and bcf
   version           print dbgmcu versions
   ps                print process tree
+  mem               dump heap chunks and usage
 )";
 
 auto handle_command(noxx::StringView line) -> coop::Async<bool> {
@@ -136,6 +137,13 @@ auto handle_command(noxx::StringView line) -> coop::Async<bool> {
         co_ensure(co_await printf<"idcode 0x{04x} revision 0x{04x}\n">(id, rev));
     } else if(elms[0] == "ps") {
         dump_task_tree((co_await coop::reveal_runner())->root);
+    } else if(elms[0] == "mem") {
+        noxx::heap_walk(nullptr, [](void*, const void* addr, const usize size, const bool is_free) {
+            printf_blocking<"  {} {} bytes {}\n">(addr, size, is_free ? "free" : "used");
+        });
+        const auto stats = noxx::heap_stats();
+        co_ensure(co_await printf<"used {} bytes ({} chunks), free {} bytes ({} chunks), largest free {} bytes\n">(
+            stats.used, stats.used_chunks, stats.free, stats.free_chunks, stats.largest_free));
     } else {
         co_ensure(co_await printf<"invalid command '{}': try help\n">(elms[0]));
     }
