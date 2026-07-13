@@ -3,7 +3,7 @@ CXX     := clang++ --target=arm-none-eabi
 LD      := ld.lld
 OBJCOPY := llvm-objcopy
 
-CFLAGS += -Os -nostdinc -Isrc -ffunction-sections
+CFLAGS += -Os -nostdinc -Isrc -ffunction-sections -MMD -MP
 CXXFLAGS += $(CFLAGS) -std=c++23 -fno-exceptions -fno-rtti -fno-use-cxa-atexit
 LDFLAGS += -nostdlib --gc-sections
 
@@ -33,3 +33,17 @@ $(addprefix $(OUT)/halow-fw-blob, .bin .hpp .cpp): tools/generate-halow-fw.py $(
 
 $(OUT)/halow/firmware.o: src/halow/firmware.cpp $(OUT)/halow-fw-blob.hpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+# halow s1g regulatory channel tables
+
+REGDB_SRC := ref/mm-iot-cmsis/mmregdb/mmregdb.c
+
+$(addprefix $(OUT)/halow-regdb, .hpp .cpp): tools/generate-halow-regdb.py $(REGDB_SRC)
+	mkdir -p $(OUT)
+	python3 tools/generate-halow-regdb.py $(REGDB_SRC) $(addprefix $(OUT)/halow-regdb, .hpp .cpp)
+
+$(OUT)/halow/scan.o: src/halow/scan.cpp $(OUT)/halow-regdb.hpp $(OUT)/halow-fw-blob.hpp
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+# -MMD generated header dependencies
+-include $(shell find $(OUT) -type f -name '*.d' 2>/dev/null)

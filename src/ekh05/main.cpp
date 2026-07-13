@@ -7,6 +7,7 @@
 #include <halow/firmware.hpp>
 #include <halow/halow.hpp>
 #include <halow/host-table.hpp>
+#include <halow/scan.hpp>
 #include <halow/yaps.hpp>
 #include <net/packet.hpp>
 #include <noxx/bits.hpp>
@@ -117,6 +118,7 @@ constexpr auto help = R"(commands:
     halow tx [len]  send a dummy loopback frame over the yaps tx queue
     halow rx        pop one pending from-chip frame and hexdump it
     halow stat      dump the yaps status register block
+    halow scan [ssid]  scan for s1g access points
   mac               print halow mac address
   version           print dbgmcu versions
   ps                print process tree
@@ -182,22 +184,16 @@ auto handle_command(noxx::StringView line) -> coop::Async<bool> {
                 co_unwrap(v, noxx::from_chars<u32>(elms[2]));
                 len = v;
             }
-            const auto packet = net::packet_alloc(halow::tx_headroom);
-            co_ensure(packet != nullptr);
-            const auto body = packet->append(len);
-            if(body == nullptr) {
-                net::packet_free(packet);
-                co_ensure(false, "payload too long");
-            }
+            const auto packet = net::AutoPacket(net::packet_alloc(halow::tx_headroom));
+            co_ensure(packet);
+            co_unwrap(body, packet->append(len), "payload too long");
             for(auto i = u32(0); i < len; i += 1) {
-                body[i] = i;
+                (&body)[i] = i;
             }
             auto status = halow::YapsStatus();
             co_ensure(co_await halow::read_status(status));
-            co_ensure(co_await printf<"tx queue before: {} pkts, {} pool pages\n">(
-                status.regs[halow::YapsStatus::TcTxPkts], status.regs[halow::YapsStatus::TcTxPoolPages]));
+            co_ensure(co_await printf<"tx queue before: {} pkts, {} pool pages\n">(status.regs[halow::YapsStatus::TcTxPkts], status.regs[halow::YapsStatus::TcTxPoolPages]));
             const auto sent = co_await halow::yaps_tx(halow::SkbChan::Loopback, *packet);
-            net::packet_free(packet);
             co_ensure(sent);
             co_await coop::sleep_ms(10);
             co_ensure(co_await halow::read_status(status));
@@ -205,29 +201,54 @@ auto handle_command(noxx::StringView line) -> coop::Async<bool> {
                 status.regs[halow::YapsStatus::TcTxPkts], status.regs[halow::YapsStatus::TcTxPoolPages]));
             co_unwrap(ptr, halow::host_table_ptr());
             co_unwrap(magic, halow::read_u32(ptr));
-            co_ensure(co_await printf<"fw health: magic 0x{08x} ({})\n">(
-                magic, magic == halow::host_magic ? "ok" : "WEDGED"));
+            co_ensure(co_await printf<"fw health: magic 0x{08x} ({})\n">(magic, magic == halow::host_magic ? "ok" : "WEDGED"));
         } else if(elms[1] == "rx") {
             co_unwrap(packet, co_await halow::fetch_rx());
-            if(packet == nullptr) {
+            if(!packet) {
                 co_await print("no frame pending\n");
             } else {
                 auto hdr_o = halow::parse_skb_header(*packet);
                 if(hdr_o) {
-                    co_ensure(co_await printf<"frame chan 0x{02x} len {} offset {} rssi {} freq {}00khz\n">(
-                        (*hdr_o).channel, (*hdr_o).len, (*hdr_o).offset, i16((*hdr_o).rssi), (*hdr_o).freq_100khz));
+                    co_ensure(co_await printf<"frame chan 0x{02x} len {} offset {} rssi {} freq {}00khz\n">((*hdr_o).channel, (*hdr_o).len, (*hdr_o).offset, i16((*hdr_o).rssi), (*hdr_o).freq_100khz));
                 }
                 co_await hexdump(packet->data(), packet->len);
-                net::packet_free(packet);
             }
+        } else if(elms[1] == "scan") {
+            co_ensure(halow_host_table, "run halow cmd first");
+            const auto ssid    = elms.size() >= 3 ? elms[2] : noxx::StringView("", 0);
+            auto       results = noxx::Array<halow::ScanResult, 8>();
+            co_unwrap(count, co_await halow::scan((*halow_host_table).mac, ssid, results));
+            for(auto i = usize(0); i < count; i += 1) {
+                const auto& res = results[i];
+                co_ensure(co_await printf<"{02x}:{02x}:{02x}:{02x}:{02x}:{02x} rssi {} freq {}00khz bcnint {} '{}'\n">(
+                    res.bssid[0], res.bssid[1], res.bssid[2], res.bssid[3], res.bssid[4], res.bssid[5],
+                    res.rssi, res.freq_100khz, res.beacon_interval,
+                    noxx::StringView((const char*)res.ssid, res.ssid_len)));
+            }
+            co_ensure(co_await printf<"{} access points found\n">(count));
         } else if(elms[1] == "stat") {
             auto status = halow::YapsStatus();
             co_ensure(co_await halow::read_status(status));
-            constexpr const char* names[] = {
-                "tc tx pool pages", "tc cmd pool pages", "tc beacon pool pages", "tc mgmt pool pages",
-                "fc rx pool pages", "fc resp pool pages", "fc tx-sts pool pages", "fc aux pool pages",
-                "tc tx pkts", "tc cmd pkts", "tc beacon pkts", "tc mgmt pkts",
-                "fc pkts", "fc done pkts", "fc rx bytes", "tc crc fail", "ysl status", "lock"};
+            constexpr auto names = noxx::to_array({
+                "tc tx pool pages",
+                "tc cmd pool pages",
+                "tc beacon pool pages",
+                "tc mgmt pool pages",
+                "fc rx pool pages",
+                "fc resp pool pages",
+                "fc tx-sts pool pages",
+                "fc aux pool pages",
+                "tc tx pkts",
+                "tc cmd pkts",
+                "tc beacon pkts",
+                "tc mgmt pkts",
+                "fc pkts",
+                "fc done pkts",
+                "fc rx bytes",
+                "tc crc fail",
+                "ysl status",
+                "lock",
+            });
             for(auto i = u32(0); i < halow::YapsStatus::Count; i += 1) {
                 co_ensure(co_await printf<"  {}: {}\n">(names[i], status.regs[i]));
             }
@@ -238,8 +259,7 @@ auto handle_command(noxx::StringView line) -> coop::Async<bool> {
     } else if(elms[0] == "mac") {
         co_ensure(halow_host_table, "run halow cmd first");
         const auto& mac = (*halow_host_table).mac;
-        co_ensure(co_await printf<"{02x}:{02x}:{02x}:{02x}:{02x}:{02x}\n">(
-            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]));
+        co_ensure(co_await printf<"{02x}:{02x}:{02x}:{02x}:{02x}:{02x}\n">(mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]));
     } else if(elms[0] == "version") {
         const auto id  = FB(hw::dbgmcu::IDCode::DeviceID, DBGMCU_REGS.idcode);
         const auto rev = FB(hw::dbgmcu::IDCode::Revision, DBGMCU_REGS.idcode);

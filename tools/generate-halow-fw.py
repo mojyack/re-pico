@@ -116,6 +116,7 @@ extern const FwSegment fw_segments[];
 extern const u32 fw_segments_count;
 extern const FwSegment bcf_segments[];
 extern const u32 bcf_segments_count;
+extern const char fw_country[]; // regdom loaded with the bcf
 extern "C" const u8 halow_fw_blob[];
 } // namespace halow
 """)
@@ -133,6 +134,7 @@ const u32 fw_segments_count = {len(fw_table)};
 const FwSegment bcf_segments[] = {{
 {emit_table(bcf_table)}}};
 const u32 bcf_segments_count = {len(bcf_table)};
+const char fw_country[] = "{country}";
 }} // namespace halow
 
 asm(".section .rodata\\n"

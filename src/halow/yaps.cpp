@@ -5,6 +5,7 @@
 
 #include "crc.hpp"
 #include "halow.hpp"
+#include "util.hpp"
 #include "yaps.hpp"
 
 #include <noxx/assert.hpp>
@@ -25,30 +26,6 @@ auto yaps            = YapsTable();
 auto ready           = false;
 auto rx_backlog_head = (net::Packet*)(nullptr);
 auto rx_backlog_len  = u32(0);
-
-template <noxx::comptime::String str, class... Args>
-auto log(const Args&... args) -> void {
-    auto raw = noxx::format<str>(noxx::move(args)...);
-    if(raw) {
-        noxx::console_out((*raw).data());
-    }
-}
-
-auto get_u16(const u8* const p) -> u16 {
-    return u16(p[0]) | u16(p[1]) << 8;
-}
-
-auto put_u16(u8* const p, const u16 v) -> void {
-    p[0] = v;
-    p[1] = v >> 8;
-}
-
-auto put_u32(u8* const p, const u32 v) -> void {
-    p[0] = v;
-    p[1] = v >> 8;
-    p[2] = v >> 16;
-    p[3] = v >> 24;
-}
 
 // crc7 over the delimiter payload bits, big-endian byte order (ref morse_yaps_crc)
 auto delim_crc(const u32 word) -> u8 {
@@ -192,6 +169,7 @@ auto parse_skb_header(const net::Packet& packet) -> noxx::Optional<SkbHeader> {
     hdr.channel     = p[1];
     hdr.len         = get_u16(p + 2);
     hdr.offset      = p[4];
+    hdr.rx_flags    = get_u32(p + 8);
     hdr.rssi        = get_u16(p + 16);
     hdr.freq_100khz = get_u16(p + 18);
     ensure(skb_hdr_size + hdr.offset + hdr.len <= packet.len, "truncated skb frame");

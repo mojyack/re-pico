@@ -53,12 +53,27 @@ struct YapsStatus {
     u32 regs[Count];
 };
 
+// rx_status flags (ref skb_header.h enum morse_rx_status_flags)
+struct RxFlag {
+    enum : u32 {
+        Error       = 1 << 0,
+        Decrypted   = 1 << 1,
+        FcsIncluded = 1 << 2,
+        Eof         = 1 << 3,
+        Ampdu       = 1 << 4,
+        Ndp         = 1 << 7,
+        Uplink      = 1 << 8,
+        CrcError    = 1 << 14,
+    };
+};
+
 // decoded skb header of a received frame
 struct SkbHeader {
     u8  channel;
     u16 len;    // payload bytes, after the header and offset pad
     u8  offset; // pad bytes between header and payload
     // rx_status fields, meaningful for from-air channels
+    u32 rx_flags; // RxFlag bits
     u16 rssi;
     u16 freq_100khz;
 };

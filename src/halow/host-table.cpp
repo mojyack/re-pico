@@ -2,6 +2,7 @@
 
 #include "halow.hpp"
 #include "host-table.hpp"
+#include "util.hpp"
 
 #include <noxx/assert.hpp>
 
@@ -19,14 +20,6 @@ constexpr auto ext_max_len  = u32(1024); // sanity bound
 
 constexpr auto tag_yaps_table = u16(3); // MORSE_FW_HOST_TABLE_TAG_YAPS_TABLE
 constexpr auto yaps_tlv_size  = u32(36);
-
-auto get_u16(const u8* const p) -> u16 {
-    return u16(p[0]) | u16(p[1]) << 8;
-}
-
-auto get_u32(const u8* const p) -> u32 {
-    return u32(p[0]) | u32(p[1]) << 8 | u32(p[2]) << 16 | u32(p[3]) << 24;
-}
 
 // tlv payload mirrors struct morse_yaps_hw_table (flags u8 + padding, then fields)
 auto parse_yaps_table(const u8* const p, YapsTable& yaps) -> void {
