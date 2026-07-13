@@ -6,8 +6,11 @@
 #include <halow/command.hpp>
 #include <halow/firmware.hpp>
 #include <halow/halow.hpp>
-#include <halow/host_table.hpp>
+#include <halow/host-table.hpp>
+#include <halow/yaps.hpp>
+#include <net/packet.hpp>
 #include <noxx/bits.hpp>
+#include <noxx/charconv.hpp>
 #include <noxx/format.hpp>
 #include <noxx/malloc.hpp>
 #include <print.hpp>
@@ -90,6 +93,19 @@ auto read_line() -> coop::Async<noxx::Optional<noxx::String>> {
 
 auto halow_host_table = noxx::Optional<halow::HostTable>();
 
+auto hexdump(const u8* const data, const usize size) -> coop::Async<bool> {
+    constexpr auto error_value = false;
+
+    for(auto i = usize(0); i < size; i += 16) {
+        co_ensure(co_await printf<"{04x}:">(u32(i)));
+        for(auto c = i; c < i + 16 && c < size; c += 1) {
+            co_ensure(co_await printf<" {02x}">(data[c]));
+        }
+        co_await print("\n");
+    }
+    co_return true;
+}
+
 constexpr auto help = R"(commands:
   help              print this message
   reboot            reboot the board
@@ -98,7 +114,9 @@ constexpr auto help = R"(commands:
     halow fw        download firmware blob and bcf
     halow cmd       parse host table, start command channel
     halow ver       query firmware version over command channel
-    halow poll      drain one pending from-chip packet
+    halow tx [len]  send a dummy loopback frame over the yaps tx queue
+    halow rx        pop one pending from-chip frame and hexdump it
+    halow stat      dump the yaps status register block
   mac               print halow mac address
   version           print dbgmcu versions
   ps                print process tree
@@ -141,7 +159,7 @@ auto handle_command(noxx::StringView line) -> coop::Async<bool> {
         } else if(elms[1] == "cmd") {
             co_unwrap(ptr, halow::host_table_ptr());
             co_unwrap(table, halow::parse_host_table(ptr));
-            halow::init_command(table.yaps);
+            halow::init_yaps(table.yaps);
             halow_host_table.emplace(table);
             co_ensure(co_await printf<"halow fw flags 0x{08x} yaps ysl 0x{08x} yds 0x{08x} status 0x{08x}\n">(
                 table.firmware_flags, table.yaps.ysl_addr, table.yaps.yds_addr, table.yaps.status_regs_addr));
@@ -158,9 +176,62 @@ auto handle_command(noxx::StringView line) -> coop::Async<bool> {
                 str_len -= 1;
             }
             co_ensure(co_await printf<"halow firmware version '{}'\n">(noxx::StringView((const char*)resp.data + 4, str_len)));
-        } else if(elms[1] == "poll") {
-            co_unwrap(consumed, co_await halow::poll_rx());
-            co_await print(consumed ? "packet consumed\n" : "no packet pending\n");
+        } else if(elms[1] == "tx") {
+            auto len = u32(64);
+            if(elms.size() >= 3) {
+                co_unwrap(v, noxx::from_chars<u32>(elms[2]));
+                len = v;
+            }
+            const auto packet = net::packet_alloc(halow::tx_headroom);
+            co_ensure(packet != nullptr);
+            const auto body = packet->append(len);
+            if(body == nullptr) {
+                net::packet_free(packet);
+                co_ensure(false, "payload too long");
+            }
+            for(auto i = u32(0); i < len; i += 1) {
+                body[i] = i;
+            }
+            auto status = halow::YapsStatus();
+            co_ensure(co_await halow::read_status(status));
+            co_ensure(co_await printf<"tx queue before: {} pkts, {} pool pages\n">(
+                status.regs[halow::YapsStatus::TcTxPkts], status.regs[halow::YapsStatus::TcTxPoolPages]));
+            const auto sent = co_await halow::yaps_tx(halow::SkbChan::Loopback, *packet);
+            net::packet_free(packet);
+            co_ensure(sent);
+            co_await coop::sleep_ms(10);
+            co_ensure(co_await halow::read_status(status));
+            co_ensure(co_await printf<"tx queue after:  {} pkts, {} pool pages\n">(
+                status.regs[halow::YapsStatus::TcTxPkts], status.regs[halow::YapsStatus::TcTxPoolPages]));
+            co_unwrap(ptr, halow::host_table_ptr());
+            co_unwrap(magic, halow::read_u32(ptr));
+            co_ensure(co_await printf<"fw health: magic 0x{08x} ({})\n">(
+                magic, magic == halow::host_magic ? "ok" : "WEDGED"));
+        } else if(elms[1] == "rx") {
+            co_unwrap(packet, co_await halow::fetch_rx());
+            if(packet == nullptr) {
+                co_await print("no frame pending\n");
+            } else {
+                auto hdr_o = halow::parse_skb_header(*packet);
+                if(hdr_o) {
+                    co_ensure(co_await printf<"frame chan 0x{02x} len {} offset {} rssi {} freq {}00khz\n">(
+                        (*hdr_o).channel, (*hdr_o).len, (*hdr_o).offset, i16((*hdr_o).rssi), (*hdr_o).freq_100khz));
+                }
+                co_await hexdump(packet->data(), packet->len);
+                net::packet_free(packet);
+            }
+        } else if(elms[1] == "stat") {
+            auto status = halow::YapsStatus();
+            co_ensure(co_await halow::read_status(status));
+            constexpr const char* names[] = {
+                "tc tx pool pages", "tc cmd pool pages", "tc beacon pool pages", "tc mgmt pool pages",
+                "fc rx pool pages", "fc resp pool pages", "fc tx-sts pool pages", "fc aux pool pages",
+                "tc tx pkts", "tc cmd pkts", "tc beacon pkts", "tc mgmt pkts",
+                "fc pkts", "fc done pkts", "fc rx bytes", "tc crc fail", "ysl status", "lock"};
+            for(auto i = u32(0); i < halow::YapsStatus::Count; i += 1) {
+                co_ensure(co_await printf<"  {}: {}\n">(names[i], status.regs[i]));
+            }
+            co_ensure(co_await printf<"packet pool: {} free\n">(net::packet_pool_avail()));
         } else {
             co_ensure(false, "invalid halow command");
         }
@@ -221,6 +292,7 @@ auto entry() -> void {
     init_system();
     uart::init(921600);
     time::start_systick();
+    net::packet_pool_init();
 
     print_blocking("ready\n");
 loop:
