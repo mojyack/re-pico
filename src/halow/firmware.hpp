@@ -1,4 +1,5 @@
 #pragma once
+#include <coop/generator.hpp>
 #include <noxx/optional.hpp>
 
 namespace halow {
@@ -20,5 +21,5 @@ constexpr auto version_patch(const u32 v) -> u32 {
     return v & 0x3ff;
 }
 
-auto load_firmware() -> noxx::Optional<FirmwareInfo>;
+auto load_firmware() -> coop::Async<noxx::Optional<FirmwareInfo>>;
 } // namespace halow

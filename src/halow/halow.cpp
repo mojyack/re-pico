@@ -2,6 +2,8 @@
 // the chip speaks the SD-over-SPI protocol (CMD52/CMD53 against a 64KB address
 // window) on SPI2, plus a few sideband GPIOs
 
+#include <coop/promise.hpp>
+#include <coop/timer.hpp>
 #include <hal/spi.hpp>
 #include <hal/time.hpp>
 #include <noxx/array.hpp>
@@ -295,7 +297,7 @@ auto write_multi(u32 address, const u8* data, u32 size) -> bool {
     return true;
 }
 
-auto init() -> bool {
+auto init() -> coop::Async<bool> {
     constexpr auto error_value = false;
 
     const auto& reset = get_gpio_line(Pin::Reset);
@@ -327,20 +329,19 @@ auto init() -> bool {
 
     // hard reset
     gpio::set(reset, false);
-    time::delay(5000);
+    co_await coop::sleep_ms(5);
     gpio::set(reset, true);
-    time::delay(20000);
+    co_await coop::sleep_ms(20);
 
     send_training_seq();
     for(auto i = 0; i < 3; i += 1) {
         if(sdio_cmd(Cmd::MorseStartup, 0)) {
             // the chip swallows the first command after startup, kick it with a dummy read
             sdio_cmd(Cmd::RWDirect, arg_func1 | reg_window_low << arg_addr_bits);
-            return true;
+            co_return true;
         }
         sdio_cmd(Cmd::GoIdle, 0);
     }
-    ensure(false); // chip not responding
-    return false;
+    co_ensure(false); // chip not responding
 }
 } // namespace halow

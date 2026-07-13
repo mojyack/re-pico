@@ -1,4 +1,5 @@
 #pragma once
+#include <coop/generator.hpp>
 #include <noxx/int.hpp>
 #include <noxx/optional.hpp>
 
@@ -12,7 +13,7 @@ struct Reg {
 };
 
 // reset the chip and establish sdio-over-spi communication
-auto init() -> bool;
+auto init() -> coop::Async<bool>;
 auto read_u32(u32 address) -> noxx::Optional<u32>;
 auto write_u32(u32 address, u32 value) -> bool;
 auto write_multi(u32 address, const u8* data, u32 size) -> bool;

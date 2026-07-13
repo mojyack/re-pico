@@ -112,12 +112,12 @@ auto handle_command(noxx::StringView line) -> coop::Async<bool> {
         co_ensure(elms.size() >= 2);
         if(elms[1] == "init") {
             co_ensure(prepare_pins_for_halow());
-            co_ensure(halow::init());
+            co_ensure(co_await halow::init());
             co_await print("halow initialized\n");
         } else if(elms[1] == "fw") {
             co_unwrap(id, halow::read_u32(halow::Reg::ChipID));
             co_ensure(co_await printf<"halow chip id 0x{08x}\n">(id));
-            co_unwrap(fw, halow::load_firmware());
+            co_unwrap(fw, co_await halow::load_firmware());
             co_ensure(co_await printf<"halow host table 0x{08x} magic 0x{08x} fw {}.{}.{}\n">(
                 fw.host_table_ptr, fw.magic,
                 halow::version_major(fw.version),

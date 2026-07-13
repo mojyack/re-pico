@@ -1,3 +1,5 @@
+#include <coop/promise.hpp>
+#include <coop/timer.hpp>
 #include <hal/time.hpp>
 #include <halow-fw-blob.hpp>
 #include <inflate.hpp>
@@ -24,30 +26,30 @@ constexpr auto host_tbl_magic      = u32(0);
 constexpr auto host_tbl_fw_version = u32(4);
 
 // latch the always-on register writes into the chip (ref morse_hw_toggle_aon_latch)
-auto toggle_aon_latch() -> bool {
+auto toggle_aon_latch() -> coop::Async<bool> {
     constexpr auto error_value = false;
 
-    unwrap(latch, read_u32(reg_aon_latch));
-    ensure(write_u32(reg_aon_latch, latch & ~reg_aon_mask));
-    time::delay(5000);
-    ensure(write_u32(reg_aon_latch, latch | reg_aon_mask));
-    time::delay(5000);
-    ensure(write_u32(reg_aon_latch, latch & ~reg_aon_mask));
-    time::delay(5000);
-    return true;
+    co_unwrap(latch, read_u32(reg_aon_latch));
+    co_ensure(write_u32(reg_aon_latch, latch & ~reg_aon_mask));
+    co_await coop::sleep_ms(5);
+    co_ensure(write_u32(reg_aon_latch, latch | reg_aon_mask));
+    co_await coop::sleep_ms(5);
+    co_ensure(write_u32(reg_aon_latch, latch & ~reg_aon_mask));
+    co_await coop::sleep_ms(5);
+    co_return true;
 }
 
 // clear always-on state then kick the firmware CPU (ref morse_firmware_trigger)
-auto firmware_trigger() -> bool {
+auto firmware_trigger() -> coop::Async<bool> {
     constexpr auto error_value = false;
 
     for(auto i = u32(0); i < reg_aon_count; i += 1) {
-        ensure(write_u32(reg_aon + i * 4, 0));
+        co_ensure(write_u32(reg_aon + i * 4, 0));
     }
-    ensure(toggle_aon_latch());
-    ensure(write_u32(reg_msi, reg_msi_host_int));
-    time::delay(5000);
-    return true;
+    co_ensure(co_await toggle_aon_latch());
+    co_ensure(write_u32(reg_msi, reg_msi_host_int));
+    co_await coop::sleep_ms(5);
+    co_return true;
 }
 
 // inflate and upload segments
@@ -65,32 +67,32 @@ auto load_segments(const FwSegment* const segments, const u32 count) -> bool {
 }
 } // namespace
 
-auto load_firmware() -> noxx::Optional<FirmwareInfo> {
+auto load_firmware() -> coop::Async<noxx::Optional<FirmwareInfo>> {
     constexpr auto error_value = noxx::nullopt;
 
     // let get_host_table_ptr detect the firmware republishing the pointer
-    ensure(write_u32(reg_manifest_ptr, 0));
+    co_ensure(write_u32(reg_manifest_ptr, 0));
 
     // segments ship as independent raw-DEFLATE streams, inflated on the fly
-    ensure(load_segments(fw_segments, fw_segments_count));
-    ensure(load_segments(bcf_segments, bcf_segments_count));
+    co_ensure(load_segments(fw_segments, fw_segments_count));
+    co_ensure(load_segments(bcf_segments, bcf_segments_count));
 
-    ensure(firmware_trigger());
+    co_ensure(co_await firmware_trigger());
 
     // poll for the firmware to publish its host table pointer (up to ~1.5s)
     auto host_table_ptr = u32(0);
     for(auto i = u32(0); i < 300; i += 1) {
-        unwrap(ptr, read_u32(reg_manifest_ptr));
+        co_unwrap(ptr, read_u32(reg_manifest_ptr));
         if(ptr != 0) {
             host_table_ptr = ptr;
             break;
         }
-        time::delay(5000);
+        co_await coop::sleep_ms(5);
     }
-    ensure(host_table_ptr != 0);
+    co_ensure(host_table_ptr != 0);
 
-    unwrap(magic, read_u32(host_table_ptr + host_tbl_magic));
-    unwrap(version, read_u32(host_table_ptr + host_tbl_fw_version));
-    return FirmwareInfo{host_table_ptr, magic, version};
+    co_unwrap(magic, read_u32(host_table_ptr + host_tbl_magic));
+    co_unwrap(version, read_u32(host_table_ptr + host_tbl_fw_version));
+    co_return FirmwareInfo{host_table_ptr, magic, version};
 }
 } // namespace halow
