@@ -18,6 +18,8 @@ EKH05_OBJS := $(OUT)/ekh05/main.o \
 			  $(OUT)/ekh05/hal/spi.o \
 			  $(OUT)/halow/halow.o \
 			  $(OUT)/halow/firmware.o \
+			  $(OUT)/halow/host_table.o \
+			  $(OUT)/halow/command.o \
 			  $(OUT)/halow-fw-blob.o \
 			  $(OUT)/coop/runner.o \
 			  $(OUT)/noxx/malloc.o \

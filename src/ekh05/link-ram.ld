@@ -10,6 +10,9 @@ SECTIONS {
         *(.text*)
         *(.rodata*)
         . = ALIGN(4);
+        init_array_start = .;
+        KEEP(*(.init_array*))
+        init_array_end = .;
     } > sram
 
     .data : {

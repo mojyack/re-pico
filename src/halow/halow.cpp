@@ -156,8 +156,11 @@ auto cmd52_write(const u32 address, const u8 data, const u32 func) -> bool {
     return sdio_cmd(Cmd::RWDirect, arg_write | func | address << arg_addr_bits | data);
 }
 
-// read `size` bytes (byte mode, size <= 512) after a CMD53 read command
-auto cmd53_read_data(u8* const data, const u32 size) -> bool {
+// data phase after a CMD53 read command. block mode transfers `count` blocks of
+// `block` bytes each (every block has its own start token and crc); byte mode
+// (block == 0) transfers a single run of `count` bytes. mirrors morselib
+// morse_cmd53_get_data.
+auto cmd53_read_data(u8* data, const u32 count, const u32 block) -> bool {
 #pragma push_macro("error_act")
 #define error_act      \
     {                  \
@@ -165,21 +168,28 @@ auto cmd53_read_data(u8* const data, const u32 size) -> bool {
         return false;  \
     }
 
+    const auto size      = block != 0 ? block : count;
+    auto       remaining = block != 0 ? count : u32(1);
+
     cs_assert();
-    auto token = u8(0xff);
-    for(auto i = u32(0); i < max_bus_attempts; i += 1) {
-        token = spi::xfer(0xff);
-        if(token == tkn_start_block) {
-            break;
+    while(remaining > 0) {
+        remaining -= 1;
+        auto token = u8(0xff);
+        for(auto i = u32(0); i < max_bus_attempts; i += 1) {
+            token = spi::xfer(0xff);
+            if(token == tkn_start_block) {
+                break;
+            }
         }
+        ensure(token == tkn_start_block);
+        for(auto i = u32(0); i < size; i += 1) {
+            data[i] = spi::xfer(0xff);
+        }
+        auto rx_crc = u16(spi::xfer(0xff)) << 8;
+        rx_crc |= spi::xfer(0xff);
+        ensure(crc16(data, size) == rx_crc);
+        data += size;
     }
-    ensure(token == tkn_start_block);
-    for(auto i = u32(0); i < size; i += 1) {
-        data[i] = spi::xfer(0xff);
-    }
-    auto rx_crc = u16(spi::xfer(0xff)) << 8;
-    rx_crc |= spi::xfer(0xff);
-    ensure(crc16(data, size) == rx_crc);
     cs_deassert();
     return true;
 #pragma pop_macro("error_act")
@@ -249,8 +259,48 @@ auto read_u32(const u32 address) -> noxx::Optional<u32> {
     ensure(set_window(address, func));
     ensure(sdio_cmd(Cmd::RWExtended, func | arg_addr_inc | (address & 0xffff) << arg_addr_bits | 4));
     u8 data[4];
-    ensure(cmd53_read_data(data, 4));
+    ensure(cmd53_read_data(data, 4, 0));
     return u32(data[0]) | u32(data[1]) << 8 | u32(data[2]) << 16 | u32(data[3]) << 24;
+}
+
+// read `size` bytes (multiple of 4) from chip memory/registers, splitting across
+// the 64KB access window and into block + byte CMD53 transfers. mirrors
+// morselib morse_trns_read_multi_byte.
+auto read_multi(u32 address, u8* data, u32 size) -> bool {
+    constexpr auto error_value = false;
+
+    ensure(size % 4 == 0);
+    const auto func     = is_memory(address) ? arg_func2 : arg_func1;
+    const auto block    = func == arg_func2 ? block_size_func2 : block_size_func1;
+    const auto max_xfer = block * max_blocks;
+    while(size > 0) {
+        ensure(set_window(address, func));
+        auto       chunk         = size < max_xfer ? size : max_xfer;
+        const auto next_boundary = (address & 0xffff0000) + 0x10000;
+        if(address + chunk > next_boundary) {
+            chunk = next_boundary - address;
+        }
+        const auto blocks = chunk / block;
+        if(blocks > 0) {
+            const auto len = blocks * block;
+            ensure(sdio_cmd(Cmd::RWExtended, func | arg_block_mode | arg_addr_inc |
+                                                 (address & 0xffff) << arg_addr_bits | blocks));
+            ensure(cmd53_read_data(data, blocks, block));
+            address += len;
+            data += len;
+            size -= len;
+            chunk -= len;
+        }
+        if(chunk > 0) {
+            ensure(sdio_cmd(Cmd::RWExtended, func | arg_addr_inc |
+                                                 (address & 0xffff) << arg_addr_bits | chunk));
+            ensure(cmd53_read_data(data, chunk, 0));
+            address += chunk;
+            data += chunk;
+            size -= chunk;
+        }
+    }
+    return true;
 }
 
 auto write_u32(const u32 address, const u32 value) -> bool {

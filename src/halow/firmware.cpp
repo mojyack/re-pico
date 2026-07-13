@@ -95,4 +95,14 @@ auto load_firmware() -> coop::Async<noxx::Optional<FirmwareInfo>> {
     co_unwrap(version, read_u32(host_table_ptr + host_tbl_fw_version));
     co_return FirmwareInfo{host_table_ptr, magic, version};
 }
+
+auto host_table_ptr() -> noxx::Optional<u32> {
+    constexpr auto error_value = noxx::nullopt;
+
+    unwrap(ptr, read_u32(reg_manifest_ptr));
+    ensure(ptr != 0, "firmware not booted");
+    unwrap(magic, read_u32(ptr + host_tbl_magic));
+    ensure(magic == host_magic, "host table magic mismatch");
+    return u32(ptr);
+}
 } // namespace halow

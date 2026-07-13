@@ -22,4 +22,7 @@ constexpr auto version_patch(const u32 v) -> u32 {
 }
 
 auto load_firmware() -> coop::Async<noxx::Optional<FirmwareInfo>>;
+
+// read back the host table pointer published by a booted firmware
+auto host_table_ptr() -> noxx::Optional<u32>;
 } // namespace halow

@@ -4,7 +4,7 @@ LD      := ld.lld
 OBJCOPY := llvm-objcopy
 
 CFLAGS += -Os -nostdinc -Isrc -ffunction-sections
-CXXFLAGS += $(CFLAGS) -std=c++23 -fno-exceptions -fno-rtti
+CXXFLAGS += $(CFLAGS) -std=c++23 -fno-exceptions -fno-rtti -fno-use-cxa-atexit
 LDFLAGS += -nostdlib --gc-sections
 
 # common rules

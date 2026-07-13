@@ -16,5 +16,6 @@ struct Reg {
 auto init() -> coop::Async<bool>;
 auto read_u32(u32 address) -> noxx::Optional<u32>;
 auto write_u32(u32 address, u32 value) -> bool;
+auto read_multi(u32 address, u8* data, u32 size) -> bool;
 auto write_multi(u32 address, const u8* data, u32 size) -> bool;
 } // namespace halow

@@ -95,6 +95,11 @@ auto __aeabi_memclr(void* dest, usize size) -> void {
 __attribute__((alias("__aeabi_memclr"))) auto __aeabi_memclr4(void* dest, usize size) -> void;
 __attribute__((alias("__aeabi_memclr"))) auto __aeabi_memclr8(void* dest, usize size) -> void;
 
+// registered global destructors never run on this bare-metal target
+auto atexit(void (*)()) -> int {
+    return 0;
+}
+
 __attribute__((optnone)) auto strlen(const char* str) -> usize {
     auto len = usize(0);
     while(str[len] != '\0') {

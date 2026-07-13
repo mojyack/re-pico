@@ -3,8 +3,10 @@
 #include <coop/task-handle.hpp>
 #include <coop/timer.hpp>
 #include <hal/uart.hpp>
+#include <halow/command.hpp>
 #include <halow/firmware.hpp>
 #include <halow/halow.hpp>
+#include <halow/host_table.hpp>
 #include <noxx/bits.hpp>
 #include <noxx/format.hpp>
 #include <noxx/malloc.hpp>
@@ -32,6 +34,8 @@ extern u32       bss_end;
 extern u32       data_start;
 extern u32       data_end;
 extern u32       data_load;
+extern void (*init_array_start[])();
+extern void (*init_array_end[])();
 
 namespace {
 template <noxx::comptime::String str, class... Args>
@@ -84,12 +88,18 @@ auto read_line() -> coop::Async<noxx::Optional<noxx::String>> {
     co_return line;
 }
 
+auto halow_host_table = noxx::Optional<halow::HostTable>();
+
 constexpr auto help = R"(commands:
   help              print this message
   reboot            reboot the board
-  halow init|fw     control mm8108
+  halow ...         control mm8108
     halow init      initialize pins
     halow fw        download firmware blob and bcf
+    halow cmd       parse host table, start command channel
+    halow ver       query firmware version over command channel
+    halow poll      drain one pending from-chip packet
+  mac               print halow mac address
   version           print dbgmcu versions
   ps                print process tree
   mem               dump heap chunks and usage
@@ -128,9 +138,37 @@ auto handle_command(noxx::StringView line) -> coop::Async<bool> {
             } else {
                 co_await print("halow firmware booted\n");
             }
+        } else if(elms[1] == "cmd") {
+            co_unwrap(ptr, halow::host_table_ptr());
+            co_unwrap(table, halow::parse_host_table(ptr));
+            halow::init_command(table.yaps);
+            halow_host_table.emplace(table);
+            co_ensure(co_await printf<"halow fw flags 0x{08x} yaps ysl 0x{08x} yds 0x{08x} status 0x{08x}\n">(
+                table.firmware_flags, table.yaps.ysl_addr, table.yaps.yds_addr, table.yaps.status_regs_addr));
+            co_ensure(co_await printf<"halow cmd queue {} pool {} pages, reserved page size {}\n">(
+                table.yaps.tc_cmd_q_size, table.yaps.tc_cmd_pool_size, table.yaps.reserved_page_size));
+            co_await print("halow command channel ready\n");
+        } else if(elms[1] == "ver") {
+            auto resp = noxx::Array<u8, 132>();
+            co_unwrap(len, co_await halow::send_command(halow::CommandId::GetVersion, {nullptr, 0}, {resp.data, resp.size()}));
+            co_ensure(len >= 4, "short version response");
+            auto str_len = usize(u32(resp[0]) | u32(resp[1]) << 8 | u32(resp[2]) << 16 | u32(resp[3]) << 24);
+            str_len      = str_len < len - 4 ? str_len : len - 4;
+            while(str_len > 0 && resp[4 + str_len - 1] == '\0') { // fw counts the terminator
+                str_len -= 1;
+            }
+            co_ensure(co_await printf<"halow firmware version '{}'\n">(noxx::StringView((const char*)resp.data + 4, str_len)));
+        } else if(elms[1] == "poll") {
+            co_unwrap(consumed, co_await halow::poll_rx());
+            co_await print(consumed ? "packet consumed\n" : "no packet pending\n");
         } else {
             co_ensure(false, "invalid halow command");
         }
+    } else if(elms[0] == "mac") {
+        co_ensure(halow_host_table, "run halow cmd first");
+        const auto& mac = (*halow_host_table).mac;
+        co_ensure(co_await printf<"{02x}:{02x}:{02x}:{02x}:{02x}:{02x}\n">(
+            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]));
     } else if(elms[0] == "version") {
         const auto id  = FB(hw::dbgmcu::IDCode::DeviceID, DBGMCU_REGS.idcode);
         const auto rev = FB(hw::dbgmcu::IDCode::Revision, DBGMCU_REGS.idcode);
@@ -171,6 +209,9 @@ auto entry() -> void {
     }
     for(auto i = u32(0); i < &data_end - &data_start; i += 1) {
         (&data_start)[i] = (&data_load)[i];
+    }
+    for(auto init = init_array_start; init != init_array_end; init += 1) {
+        (*init)();
     }
     SCB_REGS.vector_table_offset = u32(usize(&vector[0]));       // flash or SRAM, per link script
     const auto heap_end          = (usize)&stack_top - 8 * 1024; // 8KB for stack
