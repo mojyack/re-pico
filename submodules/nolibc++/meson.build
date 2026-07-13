@@ -42,3 +42,13 @@ executable('format-test',
     'tests/noxx-support.cpp',
   )
 )
+
+executable('charconv-test',
+  files(
+    'src/malloc.cpp',
+    'src/string-view.cpp',
+    'src/string.cpp',
+    'tests/charconv.cpp',
+    'tests/noxx-support.cpp',
+  )
+)
