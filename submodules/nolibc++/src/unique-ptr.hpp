@@ -5,11 +5,39 @@
 
 namespace noxx {
 template <class T>
+struct DefaultDelete {
+    auto operator()(T* const ptr) const -> void {
+        ptr->~T();
+        free(ptr);
+    }
+};
+
+template <class T>
+struct DefaultDelete<T[]> {
+    auto operator()(T* const ptr, const usize length) const -> void {
+        for(auto i = usize(0); i < length; i += 1) {
+            ptr[i].~T();
+        }
+        free(ptr);
+    }
+};
+
+template <class T, class Deleter = DefaultDelete<T>>
 struct UniquePtr {
     T* ptr = nullptr;
 
+    [[no_unique_address]] Deleter deleter;
+
     auto get() const -> T* {
         return ptr;
+    }
+
+    auto get_deleter() -> Deleter& {
+        return deleter;
+    }
+
+    auto get_deleter() const -> const Deleter& {
+        return deleter;
     }
 
     auto operator->() const -> T* {
@@ -24,17 +52,21 @@ struct UniquePtr {
         return ptr != nullptr;
     }
 
+    auto release() -> T* {
+        return exchange(ptr, nullptr);
+    }
+
     auto reset() -> void {
         if(ptr != nullptr) {
-            ptr->~T();
-            free(ptr);
+            deleter(ptr);
             ptr = nullptr;
         }
     }
 
     auto operator=(UniquePtr&& other) -> UniquePtr& {
         reset();
-        ptr = exchange(other.ptr, nullptr);
+        ptr     = exchange(other.ptr, nullptr);
+        deleter = move(other.deleter);
         return *this;
     }
 
@@ -42,6 +74,11 @@ struct UniquePtr {
 
     explicit UniquePtr(T* const ptr)
         : ptr(ptr) {
+    }
+
+    UniquePtr(T* const ptr, Deleter deleter)
+        : ptr(ptr),
+          deleter(move(deleter)) {
     }
 
     UniquePtr(UniquePtr&& other) {
@@ -53,13 +90,36 @@ struct UniquePtr {
     }
 };
 
-template <class T>
-struct UniquePtr<T[]> {
+template <class T, class Deleter>
+struct UniquePtr<T[], Deleter> {
     T*    ptr    = nullptr;
     usize length = 0;
 
+    [[no_unique_address]] Deleter deleter;
+
     auto get() const -> T* {
         return ptr;
+    }
+
+    auto get_deleter() -> Deleter& {
+        return deleter;
+    }
+
+    auto get_deleter() const -> const Deleter& {
+        return deleter;
+    }
+
+    auto release() -> T* {
+        length = 0;
+        return exchange(ptr, nullptr);
+    }
+
+    auto reset() -> void {
+        if(ptr != nullptr) {
+            deleter(ptr, length);
+            ptr    = nullptr;
+            length = 0;
+        }
     }
 
     auto operator[](const usize i) const -> T& {
@@ -70,28 +130,25 @@ struct UniquePtr<T[]> {
         return ptr != nullptr;
     }
 
-    auto reset() -> void {
-        if(ptr != nullptr) {
-            for(auto i = usize(0); i < length; i += 1) {
-                ptr[i].~T();
-            }
-            free(ptr);
-            ptr    = nullptr;
-            length = 0;
-        }
-    }
-
     auto operator=(UniquePtr&& other) -> UniquePtr& {
         reset();
-        ptr    = exchange(other.ptr, nullptr);
-        length = exchange(other.length, 0);
+        ptr     = exchange(other.ptr, nullptr);
+        length  = exchange(other.length, 0);
+        deleter = move(other.deleter);
         return *this;
     }
 
     UniquePtr() = default;
 
     UniquePtr(T* const ptr, const usize length)
-        : ptr(ptr), length(length) {
+        : ptr(ptr),
+          length(length) {
+    }
+
+    UniquePtr(T* const ptr, const usize length, Deleter deleter)
+        : ptr(ptr),
+          length(length),
+          deleter(move(deleter)) {
     }
 
     UniquePtr(UniquePtr&& other) {

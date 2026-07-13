@@ -52,3 +52,11 @@ executable('charconv-test',
     'tests/noxx-support.cpp',
   )
 )
+
+executable('unique-ptr-test',
+  files(
+    'src/malloc.cpp',
+    'tests/noxx-support.cpp',
+    'tests/unique-ptr.cpp',
+  )
+)
