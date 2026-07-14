@@ -106,6 +106,8 @@ constexpr auto help = R"(commands:
     halow scan [ssid]  scan for s1g access points
     halow connect <ssid>  associate with an open s1g access point
     halow disconnect   deauthenticate and tear the link down
+    halow link         print link status
+    halow keepalive    send a qos-null keepalive to the ap
     halow dump [sec]   dump received ethernet frames
     halow arp <ipv4>   broadcast an arp request over the link
   mac               print halow mac address
@@ -227,23 +229,24 @@ auto handle_command(noxx::StringView line) -> coop::Async<bool> {
             co_ensure(co_await halow::disconnect());
             co_await print("disconnected\n");
         } else if(elms[1] == "dump") {
+            co_ensure(halow::link_status().up, "not connected");
             auto seconds = u32(10);
             if(elms.size() >= 3) {
                 co_unwrap(v, noxx::from_chars<u32>(elms[2]));
                 seconds = v;
             }
-            co_ensure(co_await printf<"dumping rx as ethernet frames for {}s\n">(seconds));
+            co_ensure(co_await printf<"dumping rx ethernet frames for {}s\n">(seconds));
             const auto deadline = time::now() + u64(seconds) * 1'000'000;
-            auto       popped   = u32(0);
             auto       shown    = u32(0);
+            // the link maintenance task owns the raw stream and decodes frames
             while(time::now() < deadline) {
-                co_unwrap(packet, co_await halow::fetch_rx());
+                auto packet = halow::link_rx_pop();
                 if(!packet) {
+                    if(!halow::link_status().up) {
+                        co_await print(halow::link_desynced() ? "link desynced, reboot required\n" : "link down\n");
+                        break;
+                    }
                     co_await coop::sleep_ms(10);
-                    continue;
-                }
-                popped += 1;
-                if(!halow::eth_from_rx(*packet)) {
                     continue;
                 }
                 shown += 1;
@@ -253,7 +256,19 @@ auto handle_command(noxx::StringView line) -> coop::Async<bool> {
                     u16(p[12]) << 8 | p[13], packet->len));
                 co_await hexdump(p, packet->len);
             }
-            co_ensure(co_await printf<"dump done: {} frames popped, {} ethernet\n">(popped, shown));
+            co_ensure(co_await printf<"dump done: {} ethernet frames\n">(shown));
+        } else if(elms[1] == "keepalive") {
+            co_ensure(co_await halow::send_keepalive());
+            co_await print("keepalive sent\n");
+        } else if(elms[1] == "link") {
+            const auto& link = halow::link_status();
+            if(!link.up) {
+                co_await print(halow::link_desynced() ? "link down (rx desynced, reboot required)\n" : "link down\n");
+            } else {
+                co_ensure(co_await printf<"link up: bssid {02x}:{02x}:{02x}:{02x}:{02x}:{02x} aid {} {}khz\n">(
+                    link.bssid[0], link.bssid[1], link.bssid[2], link.bssid[3], link.bssid[4], link.bssid[5],
+                    link.aid, link.freq_khz));
+            }
         } else if(elms[1] == "arp") {
             co_ensure(elms.size() >= 3, "usage: halow arp <target-ipv4> [sender-ipv4]");
             auto parse_ip = [](noxx::StringView str, u8* out) -> bool {

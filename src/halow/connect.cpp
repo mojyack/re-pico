@@ -1,4 +1,6 @@
 #include <coop/promise.hpp>
+#include <coop/runner.hpp>
+#include <coop/task-handle.hpp>
 #include <coop/timer.hpp>
 #include <hal/time.hpp>
 #include <noxx/array.hpp>
@@ -31,6 +33,33 @@ auto pkt_id = u32(0); // tx status correlation
 
 // primary channel width and rate for the current link, from the s1g operation ie
 auto prim_bw_mhz = u8(1);
+
+// link maintenance task state (see link_task)
+constexpr auto keepalive_interval_us = u64(30'000'000); // idle time before a keepalive, well under the ap inactivity timeout
+constexpr auto rx_error_limit        = u32(8);          // consecutive rx stream errors treated as a desync
+constexpr auto rx_queue_max          = u32(6);          // decoded frames buffered for link_rx_pop
+
+auto desynced      = false;             // rx stream wedged, chip reboot required
+auto last_activity = u64(0);            // last rx/tx time, drives the keepalive timer
+auto link_handle   = coop::TaskHandle(); // link_task's handle, cancelled by disconnect
+
+auto rx_queue_head = (net::Packet*)(nullptr);
+auto rx_queue_len  = u32(0);
+
+auto queue_rx(net::Packet* const packet) -> void {
+    if(rx_queue_len >= rx_queue_max) {
+        log<"halow: link rx queue full, dropping frame\n">();
+        net::packet_free(packet);
+        return;
+    }
+    packet->next = nullptr;
+    auto tail    = &rx_queue_head;
+    while(*tail != nullptr) {
+        tail = &(*tail)->next;
+    }
+    *tail = packet;
+    rx_queue_len += 1;
+}
 
 auto mgmt_rate() -> u32 {
     return make_s1g_rate_code(prim_bw_mhz == 1 ? RateBw::Bw1Mhz : RateBw::Bw2Mhz, 0, 0);
@@ -285,6 +314,50 @@ auto associate(const noxx::StringView ssid) -> coop::Async<bool> {
     link.aid = aid;
     co_return true;
 }
+
+// mark the link as lost from inside the maintenance task; the loop then exits
+// and the post-loop teardown removes the chip interface. only the task calls
+// this — an explicit disconnect() cancels the task and owns its own teardown
+auto mark_link_down() -> void {
+    link.up = false;
+}
+
+// classify one from-air frame: tear the link down on deauth/disassoc from the
+// ap, decode data frames into the rx queue, drop the rest
+auto handle_air_frame(net::AutoPacket rx) -> void {
+    const auto skbh = parse_skb_header(*rx);
+    if(skbh == nullptr) {
+        return;
+    }
+    if(skbh->channel == SkbChan::TxStatus) {
+        log_tx_status(*rx, *skbh);
+        return;
+    }
+
+    // peek the 802.11 frame control for a deauth/disassoc from our bss before
+    // handing data frames off to eth_from_rx
+    const auto body = packet_frame(*rx, *skbh);
+    auto       len  = usize(skbh->len);
+    if(skbh->rx_status.flags & RxFlag::FcsIncluded) {
+        if(len < dot11::fcs_len) {
+            return;
+        }
+        len -= dot11::fcs_len;
+    }
+    if(len >= sizeof(dot11::Header)) {
+        const auto wifi = (const dot11::Header*)body;
+        const auto kind = wifi->frame_control & dot11::Fc::VerTypeSubMask;
+        if((kind == dot11::Fc::Deauth || kind == dot11::Fc::Disassoc) && mac_equal(wifi->addr2.data, link.bssid.data)) {
+            log<"halow: ap sent {}, link down\n">(kind == dot11::Fc::Deauth ? "deauth" : "disassoc");
+            mark_link_down();
+            return;
+        }
+    }
+
+    if(eth_from_rx(*rx)) {
+        queue_rx(rx.release());
+    }
+}
 } // namespace
 
 auto connect(const dot11::MacAddr& mac, const noxx::StringView ssid) -> coop::Async<bool> {
@@ -358,7 +431,12 @@ auto connect(const dot11::MacAddr& mac, const noxx::StringView ssid) -> coop::As
         co_return false;
     }
 
-    link.up = true;
+    link.up       = true;
+    desynced      = false;
+    last_activity = time::now();
+    // hand ongoing rx / keepalive / loss detection to a background task,
+    // keeping its handle so disconnect can cancel it
+    co_ensure((co_await coop::reveal_runner())->push_task(link_task(), &link_handle), "failed to start link task");
     log<"halow: associated, aid {}\n">(link.aid);
     co_return true;
 }
@@ -367,7 +445,13 @@ auto disconnect() -> coop::Async<bool> {
     constexpr auto error_value = false;
 
     co_ensure(link.up, "not connected");
+    // cancel the maintenance task first so it stops touching the yaps stream
+    // while we run the teardown commands below (link.up is true here, so the
+    // task is still alive and the handle is valid)
+    link_handle.cancel();
     link.up = false;
+    while(auto packet = link_rx_pop()) {
+    }
 
     const auto deauth = dot11::Deauth{
         .header      = make_mgmt_header(dot11::Fc::Deauth, link.bssid, link.mac, link.bssid),
@@ -376,6 +460,106 @@ auto disconnect() -> coop::Async<bool> {
     co_await tx_mgmt(as_span(deauth));
 
     co_await set_sta_state(StaState::None, 0);
+    co_await send_command(CommandId::RemoveInterface, {nullptr, 0}, {nullptr, 0}, link.vif);
+    link = LinkStatus();
+    co_return true;
+}
+
+auto link_desynced() -> bool {
+    return desynced;
+}
+
+auto link_rx_pop() -> net::AutoPacket {
+    const auto packet = rx_queue_head;
+    if(packet != nullptr) {
+        rx_queue_head = packet->next;
+        packet->next  = nullptr;
+        rx_queue_len -= 1;
+    }
+    return net::AutoPacket(packet);
+}
+
+auto send_keepalive() -> coop::Async<bool> {
+    constexpr auto error_value = false;
+
+    co_ensure(link.up, "not connected");
+    const auto packet = net::AutoPacket(net::packet_alloc(tx_headroom));
+    co_ensure(packet.get() != nullptr);
+
+    // to-ds qos-null: addr1 = bssid, addr2 = us, addr3 = bssid, no payload
+    // (ref umac_datapath_build_3addr_to_ds_qos_null)
+    co_unwrap(qos, (dot11::QosData*)packet->append(sizeof(dot11::QosData)));
+    qos = {
+        .header      = make_mgmt_header(dot11::Fc::QosNull | dot11::Fc::ToDs, link.bssid, link.mac, link.bssid),
+        .qos_control = 0,
+    };
+
+    pkt_id += 1;
+    const auto info = SkbHeader::TxInfo{
+        .flags  = TxFlag::ImmediateReport | BF(TxFlag::VifId, u32(link.vif)),
+        .pkt_id = pkt_id,
+        .tid    = mgmt_tid,
+        .rates  = {{.rate_code = mgmt_rate(), .count = mgmt_attempts}},
+    };
+    co_return co_await yaps_tx(SkbChan::Data, *packet, &info);
+}
+
+auto link_task() -> coop::Async<bool> {
+    constexpr auto error_value = false;
+
+    last_activity  = time::now();
+    auto rx_errors = u32(0);
+    while(link.up) {
+        // firmware-signalled loss (beacon loss / tsf reset)
+        while(auto event = pop_event()) {
+            const auto id = event_id(*event);
+            if(id == EventId::BeaconLoss || id == EventId::ConnectionLoss) {
+                log<"halow: link lost (event 0x{04x})\n">(id);
+                mark_link_down();
+            }
+        }
+        if(!link.up) {
+            break;
+        }
+
+        auto rx_o    = co_await fetch_rx();
+        auto handled = false;
+        if(!rx_o) {
+            // a yaps read error: a run of these means the rx stream desynced
+            rx_errors += 1;
+            if(rx_errors >= rx_error_limit) {
+                log<"halow: rx stream desynced, link down (reboot required)\n">();
+                desynced = true;
+                mark_link_down();
+                break;
+            }
+        } else if(*rx_o) {
+            rx_errors     = 0;
+            handled       = true;
+            last_activity = time::now();
+            handle_air_frame(noxx::move(*rx_o));
+        } else {
+            rx_errors = 0;
+        }
+
+        // keep the association fresh while idle
+        if(link.up && time::now() - last_activity > keepalive_interval_us) {
+            if(co_await send_keepalive()) {
+                last_activity = time::now();
+            }
+        }
+
+        if(!handled) {
+            co_await coop::sleep_ms(rx_poll_ms);
+        }
+    }
+
+    // free any frames the consumer never drained
+    while(auto packet = link_rx_pop()) {
+    }
+    // reached only on an involuntary loss — an explicit disconnect cancels the
+    // task before it gets here. remove the chip interface so a later connect
+    // starts clean, and reset the link state
     co_await send_command(CommandId::RemoveInterface, {nullptr, 0}, {nullptr, 0}, link.vif);
     link = LinkStatus();
     co_return true;

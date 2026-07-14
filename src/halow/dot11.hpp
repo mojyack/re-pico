@@ -20,11 +20,13 @@ struct Fc {
         SubAssocResp = 1 << 4,
         SubProbeReq  = 4 << 4,
         SubProbeResp = 5 << 4,
+        SubDisassoc  = 10 << 4,
         SubAuth      = 11 << 4,
         SubDeauth    = 12 << 4,
 
         // data subtypes
         SubQosData = 8 << 4,
+        SubQosNull = 12 << 4,
 
         // ext subtypes
         SubS1gBeacon = 1 << 4,
@@ -36,7 +38,9 @@ struct Fc {
         AssocResp = TypeMgmt | SubAssocResp,
         Auth      = TypeMgmt | SubAuth,
         Deauth    = TypeMgmt | SubDeauth,
+        Disassoc  = TypeMgmt | SubDisassoc,
         QosData   = TypeData | SubQosData,
+        QosNull   = TypeData | SubQosNull,
 
         // flag bits in the high byte
         ToDs      = 1 << 8,
