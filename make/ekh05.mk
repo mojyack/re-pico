@@ -35,6 +35,7 @@ EKH05_OBJS := $(OUT)/ekh05/main.o \
 			  $(OUT)/split.o \
 			  $(OUT)/print.o \
 			  $(OUT)/uart.o \
+			  $(OUT)/console.o \
 			  $(OUT)/inflate.o
 
 all: $(OUT)/firmware.bin

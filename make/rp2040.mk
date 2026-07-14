@@ -22,6 +22,7 @@ RP2040_OBJS := $(OUT)/rp2040/main.o \
 			   $(OUT)/abi.o \
 			   $(OUT)/split.o \
 			   $(OUT)/print.o \
+			   $(OUT)/console.o \
 			   $(OUT)/uart.o
 
 # firmware images

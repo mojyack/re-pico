@@ -1,3 +1,4 @@
+#include <console.hpp>
 #include <coop/io.hpp>
 #include <coop/promise.hpp>
 #include <coop/task-handle.hpp>
@@ -74,24 +75,6 @@ auto dump_task_tree(const coop::Task& task, const int indent = 0) -> void {
     for(auto i = usize(0); i < task.children.size(); i += 1) {
         dump_task_tree(*task.children[i], indent + 2);
     }
-}
-
-auto read_line() -> coop::Async<noxx::Optional<noxx::String>> {
-    constexpr auto error_value = noxx::nullopt;
-
-    auto line = noxx::String();
-    while(true) {
-        co_ensure(co_await coop::wait_for_io(uart::read_event));
-        auto c = u8();
-        co_ensure(uart::read({&c, 1}) == 1);
-        co_await uart::write_all({&c, 1});
-        if(c == '\r' || c == '\n') {
-            break;
-        } else {
-            line.append(c);
-        }
-    }
-    co_return line;
 }
 
 auto halow_host_table = noxx::Optional<halow::HostTable>();
