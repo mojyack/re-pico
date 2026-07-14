@@ -4,11 +4,13 @@
 #include <coop/timer.hpp>
 #include <hal/uart.hpp>
 #include <halow/command.hpp>
+#include <halow/connect.hpp>
 #include <halow/firmware.hpp>
 #include <halow/halow.hpp>
 #include <halow/host-table.hpp>
 #include <halow/scan.hpp>
 #include <halow/yaps.hpp>
+#include <net/arp.hpp>
 #include <net/packet.hpp>
 #include <noxx/bits.hpp>
 #include <noxx/charconv.hpp>
@@ -119,6 +121,10 @@ constexpr auto help = R"(commands:
     halow rx        pop one pending from-chip frame and hexdump it
     halow stat      dump the yaps status register block
     halow scan [ssid]  scan for s1g access points
+    halow connect <ssid>  associate with an open s1g access point
+    halow disconnect   deauthenticate and tear the link down
+    halow dump [sec]   dump received ethernet frames
+    halow arp <ipv4>   broadcast an arp request over the link
   mac               print halow mac address
   version           print dbgmcu versions
   ps                print process tree
@@ -226,6 +232,76 @@ auto handle_command(noxx::StringView line) -> coop::Async<bool> {
                     noxx::StringView((const char*)res.ssid, res.ssid_len)));
             }
             co_ensure(co_await printf<"{} access points found\n">(count));
+        } else if(elms[1] == "connect") {
+            co_ensure(halow_host_table, "run halow cmd first");
+            co_ensure(elms.size() >= 3, "usage: halow connect <ssid>");
+            co_ensure(co_await halow::connect((*halow_host_table).mac, elms[2]));
+            const auto& link = halow::link_status();
+            co_ensure(co_await printf<"connected to {02x}:{02x}:{02x}:{02x}:{02x}:{02x} aid {} on {}khz\n">(
+                link.bssid[0], link.bssid[1], link.bssid[2], link.bssid[3], link.bssid[4], link.bssid[5],
+                link.aid, link.freq_khz));
+        } else if(elms[1] == "disconnect") {
+            co_ensure(co_await halow::disconnect());
+            co_await print("disconnected\n");
+        } else if(elms[1] == "dump") {
+            auto seconds = u32(10);
+            if(elms.size() >= 3) {
+                co_unwrap(v, noxx::from_chars<u32>(elms[2]));
+                seconds = v;
+            }
+            co_ensure(co_await printf<"dumping rx as ethernet frames for {}s\n">(seconds));
+            const auto deadline = time::now() + u64(seconds) * 1'000'000;
+            auto       popped   = u32(0);
+            auto       shown    = u32(0);
+            while(time::now() < deadline) {
+                co_unwrap(packet, co_await halow::fetch_rx());
+                if(!packet) {
+                    co_await coop::sleep_ms(10);
+                    continue;
+                }
+                popped += 1;
+                if(!halow::eth_from_rx(*packet)) {
+                    continue;
+                }
+                shown += 1;
+                const auto p = packet->data();
+                co_ensure(co_await printf<"eth {02x}:{02x}:{02x}:{02x}:{02x}:{02x} <- {02x}:{02x}:{02x}:{02x}:{02x}:{02x} type 0x{04x} len {}\n">(
+                    p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8], p[9], p[10], p[11],
+                    u16(p[12]) << 8 | p[13], packet->len));
+                co_await hexdump(p, packet->len);
+            }
+            co_ensure(co_await printf<"dump done: {} frames popped, {} ethernet\n">(popped, shown));
+        } else if(elms[1] == "arp") {
+            co_ensure(elms.size() >= 3, "usage: halow arp <target-ipv4> [sender-ipv4]");
+            auto parse_ip = [](noxx::StringView str, u8* out) -> bool {
+                constexpr auto error_value = false;
+                unwrap(parts, split(str, "."));
+                ensure(parts.size() == 4, "bad ipv4 address");
+                for(auto i = usize(0); i < 4; i += 1) {
+                    unwrap(v, noxx::from_chars<u8>(parts[i]));
+                    out[i] = v;
+                }
+                return true;
+            };
+            auto ip     = noxx::Array<u8, 4>();
+            auto sender = noxx::Array<u8, 4>();
+            for(auto i = usize(0); i < 4; i += 1) {
+                sender[i] = 0;
+            }
+            co_ensure(parse_ip(elms[2], ip.data));
+            if(elms.size() >= 4) {
+                co_ensure(parse_ip(elms[3], sender.data));
+            }
+            const auto& link = halow::link_status();
+            co_ensure(link.up, "not connected");
+            auto arp = noxx::Array<u8, net::arp::packet_size>();
+            co_ensure(net::arp::build_request({arp.data, arp.size()}, link.mac, sender.data, ip.data));
+            constexpr auto broadcast = noxx::to_array<u8>({0xff, 0xff, 0xff, 0xff, 0xff, 0xff});
+            // "uni" sends the request unicast to the ap itself, which is acked
+            // over the air and exercises the reliable data path
+            const auto dst = (elms.size() >= 5 && elms[4] == "uni") ? halow::link_status().bssid : broadcast.data;
+            co_ensure(co_await halow::eth_tx(dst, net::arp::ethertype, {arp.data, arp.size()}));
+            co_await print("arp request sent, use halow dump to see the reply\n");
         } else if(elms[1] == "stat") {
             auto status = halow::YapsStatus();
             co_ensure(co_await halow::read_status(status));

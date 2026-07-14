@@ -22,7 +22,9 @@ EKH05_OBJS := $(OUT)/ekh05/main.o \
 			  $(OUT)/halow/command.o \
 			  $(OUT)/halow/yaps.o \
 			  $(OUT)/halow/scan.o \
+			  $(OUT)/halow/connect.o \
 			  $(OUT)/net/packet.o \
+			  $(OUT)/net/arp.o \
 			  $(OUT)/halow-fw-blob.o \
 			  $(OUT)/halow-regdb.o \
 			  $(OUT)/coop/runner.o \

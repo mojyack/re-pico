@@ -67,6 +67,38 @@ struct RxFlag {
     };
 };
 
+// tx_info flags (ref skb_header.h enum morse_tx_status_and_conf_flags)
+struct TxFlag {
+    enum : u32 {
+        NoAck           = 1u << 0,
+        HwEncrypt       = 1u << 3,
+        ImmediateReport = 1u << 31,
+    };
+};
+
+// vif id rides in tx_info flags bits [11:4]
+inline auto tx_flag_vif(const u16 vif) -> u32 {
+    return u32(vif & 0xff) << 4;
+}
+
+// morse rate codes (ref morse_rate_code.h): preamble[3:0] mcs[7:4] nss[10:8] bw[13:11]
+struct RateCode {
+    enum : u32 {
+        Mcs0Bw1Mhz = 2,            // 1MHz preamble
+        Mcs0Bw2Mhz = 1 << 11 | 1,  // 2MHz bw, s1g short preamble
+    };
+};
+
+// tx_info fields written into the skb header (ref struct morse_skb_tx_info);
+// only the first rate table entry is exposed
+struct TxInfo {
+    u32 flags    = 0; // TxFlag bits | tx_flag_vif()
+    u32 pkt_id   = 0; // echoed in the tx status report
+    u8  tid      = 0;
+    u32 rate     = 0; // RateCode for rates[0], 0 = leave rate control to fw
+    u8  attempts = 0; // tx attempts at rate
+};
+
 // decoded skb header of a received frame
 struct SkbHeader {
     u8  channel;
@@ -86,8 +118,8 @@ auto read_status(YapsStatus& status) -> coop::Async<bool>;
 
 // send the packet payload as one frame on channel, waiting for chip queue
 // space; the packet needs tx_headroom of headroom and is not freed.
-// the skb header tx_info fields are left zero (no rate control hints)
-auto yaps_tx(u8 channel, net::Packet& packet) -> coop::Async<bool>;
+// info fills the skb header tx_info fields, null leaves them zero
+auto yaps_tx(u8 channel, net::Packet& packet, const TxInfo* info = nullptr) -> coop::Async<bool>;
 
 // pop one pending from-chip frame; the packet data starts at the skb header.
 // returns nullptr if nothing is pending
@@ -95,6 +127,11 @@ auto yaps_rx() -> noxx::Optional<net::AutoPacket>;
 
 // validate and decode the skb header at the start of an rx frame
 auto parse_skb_header(const net::Packet& packet) -> noxx::Optional<SkbHeader>;
+
+// start of the frame payload described by a decoded skb header
+inline auto packet_frame(const net::Packet& packet, const SkbHeader& hdr) -> const u8* {
+    return packet.data() + skb_hdr_size + hdr.offset;
+}
 
 // backlog of received frames nobody was waiting for, bounded; push frees on overflow
 auto push_rx_backlog(net::Packet* packet) -> void;

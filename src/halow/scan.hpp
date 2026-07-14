@@ -1,5 +1,6 @@
 #pragma once
 #include <coop/generator.hpp>
+#include <halow-regdb.hpp>
 #include <noxx/optional.hpp>
 #include <noxx/span.hpp>
 #include <noxx/string-view.hpp>
@@ -18,7 +19,12 @@ struct ScanResult {
     u16 freq_100khz;
     u16 beacon_interval;
     u16 capability_info;
+    u8  s1g_op[dot11::S1gOp::Size]; // s1g operation ie body, valid if has_s1g_op
+    bool has_s1g_op;
 };
+
+// the regdom matching the country the firmware's bcf was loaded with
+auto find_regdom() -> const Regdom*;
 
 // run a chip-driven scan over the regdom the firmware was loaded with;
 // a non-empty ssid narrows the probe to that network.

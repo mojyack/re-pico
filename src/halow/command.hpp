@@ -8,9 +8,15 @@ namespace halow {
 // firmware command ids (ref common/morse_commands.h)
 struct CommandId {
     enum : u16 {
+        SetChannel      = 0x0001,
         GetVersion      = 0x0002,
+        SetTxPower      = 0x0003,
         AddInterface    = 0x0004,
         RemoveInterface = 0x0005,
+        BssConfig       = 0x0006,
+        SetQosParams    = 0x0011,
+        SetStaState     = 0x0014,
+        ConfigPs        = 0x0016,
         HwScan          = 0x0044,
     };
 };

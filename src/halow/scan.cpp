@@ -84,16 +84,6 @@ auto channel_scannable(const S1gChannel& channel) -> bool {
     return channel.bw_mhz <= 2;
 }
 
-// the regdom matching the country the firmware's bcf was loaded with
-auto find_regdom() -> const Regdom* {
-    for(auto i = u32(0); i < regdoms_count; i += 1) {
-        if(regdoms[i].country[0] == fw_country[0] && regdoms[i].country[1] == fw_country[1]) {
-            return &regdoms[i];
-        }
-    }
-    return nullptr;
-}
-
 // distinct per-channel tx powers, in first-seen order; a channel's power
 // list index is the position of its eirp here (ref hw_scan power indexing)
 struct PowerList {
@@ -111,56 +101,6 @@ struct PowerList {
             count += 1;
         }
         return count - 1;
-    }
-};
-
-// appends little-endian scalars and byte runs to a fixed buffer, tracking overflow
-struct Builder {
-    noxx::Span<u8> buf;
-    usize          offset   = 0;
-    bool           overflow = false;
-
-    auto put(const u8 v) -> void {
-        if(offset >= buf.size) {
-            overflow = true;
-            return;
-        }
-        buf[offset] = v;
-        offset += 1;
-    }
-
-    auto put_u16(const u16 v) -> void {
-        put(u8(v));
-        put(u8(v >> 8));
-    }
-
-    auto put_u32(const u32 v) -> void {
-        put_u16(u16(v));
-        put_u16(u16(v >> 16));
-    }
-
-    auto put_bytes(const u8* const data, const usize size) -> void {
-        for(auto i = usize(0); i < size; i += 1) {
-            put(data[i]);
-        }
-    }
-
-    // begin a tlv, returning the offset of its length field for end_tlv
-    auto begin_tlv(const u16 tag) -> usize {
-        put_u16(tag);
-        const auto len_at = offset;
-        put_u16(0);
-        return len_at;
-    }
-
-    // patch the tlv length with the bytes appended since begin_tlv
-    auto end_tlv(const usize len_at) -> void {
-        if(overflow) {
-            return;
-        }
-        const auto len  = u16(offset - len_at - 2);
-        buf[len_at]     = len;
-        buf[len_at + 1] = len >> 8;
     }
 };
 
@@ -236,15 +176,6 @@ auto build_hw_scan_req(Builder& b, const Regdom& regdom, const u8 (&mac)[dot11::
     b.end_tlv(len_at);
 }
 
-auto mac_equal(const u8* const a, const u8* const b) -> bool {
-    for(auto i = usize(0); i < dot11::mac_len; i += 1) {
-        if(a[i] != b[i]) {
-            return false;
-        }
-    }
-    return true;
-}
-
 // record a probe response into results if it is new; returns updated count.
 // from-air frames arrive on the data channel regardless of 802.11 type,
 // dispatch is on the frame control field
@@ -286,21 +217,34 @@ auto process_mgmt_frame(const net::Packet& packet, const noxx::Span<ScanResult> 
     res.rssi            = i16(hdr.rssi);
     res.freq_100khz     = hdr.freq_100khz;
     res.ssid_len        = 0;
+    res.has_s1g_op      = false;
 
-    // find the ssid ie
+    // pick the ssid and s1g operation ies
     auto p   = body + dot11::ProbeResp::Ies;
     auto end = body + len;
     while(p + dot11::ie_hdr_size <= end && p + dot11::ie_hdr_size + p[1] <= end) {
         if(p[0] == dot11::Ie::Ssid) {
             res.ssid_len = p[1] < sizeof(res.ssid) ? p[1] : sizeof(res.ssid);
             noxx::memcpy(res.ssid, p + dot11::ie_hdr_size, res.ssid_len);
-            break;
+        } else if(p[0] == dot11::Ie::S1gOperation && p[1] >= dot11::S1gOp::Size) {
+            noxx::memcpy(res.s1g_op, p + dot11::ie_hdr_size, dot11::S1gOp::Size);
+            res.has_s1g_op = true;
         }
         p += dot11::ie_hdr_size + p[1];
     }
     return count + 1;
 }
 } // namespace
+
+// the regdom matching the country the firmware's bcf was loaded with
+auto find_regdom() -> const Regdom* {
+    for(auto i = u32(0); i < regdoms_count; i += 1) {
+        if(regdoms[i].country[0] == fw_country[0] && regdoms[i].country[1] == fw_country[1]) {
+            return &regdoms[i];
+        }
+    }
+    return nullptr;
+}
 
 auto scan(const u8 (&mac)[dot11::mac_len], const noxx::StringView ssid, const noxx::Span<ScanResult> results) -> coop::Async<noxx::Optional<usize>> {
     constexpr auto error_value = noxx::nullopt;

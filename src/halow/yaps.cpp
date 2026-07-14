@@ -82,7 +82,7 @@ auto read_status(YapsStatus& status) -> coop::Async<bool> {
     }
 }
 
-auto yaps_tx(const u8 channel, net::Packet& packet) -> coop::Async<bool> {
+auto yaps_tx(const u8 channel, net::Packet& packet, const TxInfo* const info) -> coop::Async<bool> {
     constexpr auto error_value = false;
 
     co_ensure(ready, "yaps not initialized");
@@ -92,7 +92,7 @@ auto yaps_tx(const u8 channel, net::Packet& packet) -> coop::Async<bool> {
     co_ensure(packet.headroom() >= tx_headroom, "missing tx headroom");
     co_ensure(packet.tailroom() >= frame_len - skb_hdr_size - payload_len, "missing pad tailroom");
 
-    // frame: [delimiter][skb header, tx_info zeroed][payload][pad to 4]
+    // frame: [delimiter][skb header][payload][pad to 4]
     for(auto pad = frame_len - skb_hdr_size - payload_len; pad > 0; pad -= 1) {
         *packet.append(1) = 0;
     }
@@ -104,6 +104,14 @@ auto yaps_tx(const u8 channel, net::Packet& packet) -> coop::Async<bool> {
     hdr[0] = skb_sync;
     hdr[1] = channel;
     put_u16(hdr + 2, payload_len);
+    if(info != nullptr) {
+        // tx_info union: flags @8, pkt_id @12, tid @16, rates[0] {rc u32, count u8} @20
+        put_u32(hdr + 8, info->flags);
+        put_u32(hdr + 12, info->pkt_id);
+        hdr[16] = info->tid;
+        put_u32(hdr + 20, info->rate);
+        hdr[24] = info->attempts;
+    }
     const auto queue = tc_queue_for_channel(channel);
     put_u32(packet.prepend(4), make_delim(frame_len + yaps.reserved_page_size, queue.pool_id, true));
 

@@ -43,6 +43,8 @@ $(addprefix $(OUT)/halow-regdb, .hpp .cpp): tools/generate-halow-regdb.py $(REGD
 	python3 tools/generate-halow-regdb.py $(REGDB_SRC) $(addprefix $(OUT)/halow-regdb, .hpp .cpp)
 
 $(OUT)/halow/scan.o: src/halow/scan.cpp $(OUT)/halow-regdb.hpp $(OUT)/halow-fw-blob.hpp
+
+$(OUT)/halow/connect.o: src/halow/connect.cpp $(OUT)/halow-regdb.hpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 # -MMD generated header dependencies
