@@ -213,9 +213,9 @@ auto handle_command(noxx::StringView line) -> coop::Async<bool> {
             if(!packet) {
                 co_await print("no frame pending\n");
             } else {
-                auto hdr_o = halow::parse_skb_header(*packet);
-                if(hdr_o) {
-                    co_ensure(co_await printf<"frame chan 0x{02x} len {} offset {} rssi {} freq {}00khz\n">((*hdr_o).channel, (*hdr_o).len, (*hdr_o).offset, i16((*hdr_o).rssi), (*hdr_o).freq_100khz));
+                const auto hdr = halow::parse_skb_header(*packet);
+                if(hdr != nullptr) {
+                    co_ensure(co_await printf<"frame chan 0x{02x} len {} offset {} rssi {} freq {}00khz\n">(hdr->channel, hdr->len, hdr->offset, i16(hdr->rx_status.rssi), hdr->rx_status.freq_100khz));
                 }
                 co_await hexdump(packet->data(), packet->len);
             }
@@ -295,11 +295,11 @@ auto handle_command(noxx::StringView line) -> coop::Async<bool> {
             const auto& link = halow::link_status();
             co_ensure(link.up, "not connected");
             auto arp = noxx::Array<u8, net::arp::packet_size>();
-            co_ensure(net::arp::build_request({arp.data, arp.size()}, link.mac, sender.data, ip.data));
-            constexpr auto broadcast = noxx::to_array<u8>({0xff, 0xff, 0xff, 0xff, 0xff, 0xff});
+            co_ensure(net::arp::build_request({arp.data, arp.size()}, link.mac.data, sender.data, ip.data));
+            constexpr auto broadcast = halow::dot11::MacAddr{0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
             // "uni" sends the request unicast to the ap itself, which is acked
             // over the air and exercises the reliable data path
-            const auto dst = (elms.size() >= 5 && elms[4] == "uni") ? halow::link_status().bssid : broadcast.data;
+            const auto& dst = (elms.size() >= 5 && elms[4] == "uni") ? halow::link_status().bssid : broadcast;
             co_ensure(co_await halow::eth_tx(dst, net::arp::ethertype, {arp.data, arp.size()}));
             co_await print("arp request sent, use halow dump to see the reply\n");
         } else if(elms[1] == "stat") {

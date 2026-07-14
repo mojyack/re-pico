@@ -4,40 +4,10 @@
 #include <noxx/optional.hpp>
 #include <noxx/span.hpp>
 
+#include "commands.hpp"
+
+// firmware command transport over the yaps command channel
 namespace halow {
-// firmware command ids (ref common/morse_commands.h)
-struct CommandId {
-    enum : u16 {
-        SetChannel      = 0x0001,
-        GetVersion      = 0x0002,
-        SetTxPower      = 0x0003,
-        AddInterface    = 0x0004,
-        RemoveInterface = 0x0005,
-        BssConfig       = 0x0006,
-        SetQosParams    = 0x0011,
-        SetStaState     = 0x0014,
-        ConfigPs        = 0x0016,
-        HwScan          = 0x0044,
-    };
-};
-
-// firmware event ids, arriving unsolicited on the command channel
-struct EventId {
-    enum : u16 {
-        HwScanDone = 0x4011,
-    };
-};
-
-// ADD_INTERFACE interface_type values (ref enum morse_cmd_interface_type)
-struct InterfaceType {
-    enum : u32 {
-        Invalid = 0,
-        Sta     = 1,
-        Ap      = 2,
-        Mon     = 3,
-    };
-};
-
 constexpr auto vif_invalid = u16(0xffff);
 
 // write a command to the yaps command queue and await its response.

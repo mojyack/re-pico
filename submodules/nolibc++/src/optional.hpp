@@ -37,6 +37,10 @@ struct Optional {
         return *(T*)data;
     }
 
+    auto operator*() const -> const T& {
+        return *(const T*)data;
+    }
+
     operator bool() const {
         return valid;
     }

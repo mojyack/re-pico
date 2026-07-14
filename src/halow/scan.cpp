@@ -3,6 +3,7 @@
 #include <hal/time.hpp>
 #include <halow-fw-blob.hpp>
 #include <halow-regdb.hpp>
+#include <noxx/algorithm.hpp>
 #include <noxx/array.hpp>
 
 #include "command.hpp"
@@ -15,33 +16,6 @@
 
 namespace halow {
 namespace {
-// hw scan command payload (ref umac/scan/hw_scan.c, common/morse_commands.h)
-struct HwScanFlag {
-    enum : u32 {
-        Start             = 1 << 0,
-        Abort             = 1 << 1,
-        Survey            = 1 << 2,
-        Store             = 1 << 3,
-        Probes1Mhz        = 1 << 4,
-        SchedStart        = 1 << 5,
-        SchedStop         = 1 << 6,
-        ProbeOnDozeBeacon = 1 << 7,
-    };
-};
-
-struct HwScanTlv {
-    enum : u16 {
-        Pad         = 0,
-        ProbeReq    = 1,
-        ChanList    = 2,
-        PowerList   = 3,
-        DwellOnHome = 4,
-        Sched       = 5,
-        Filter      = 6,
-        SchedParams = 7,
-    };
-};
-
 // chan list tlv entry bit layout (ref hw_scan.c enum hw_scan_channel)
 struct HwScanCh {
     enum : u32 {
@@ -77,7 +51,7 @@ constexpr auto scan_timeout_us = u64(30'000'000);
 constexpr auto rx_poll_ms      = u32(5);
 constexpr auto hw_scan_req_max = usize(320); // fits the largest regdom chan list
 
-constexpr u8 broadcast_mac[dot11::mac_len] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+constexpr auto broadcast_mac = dot11::MacAddr{0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
 
 // only 1/2MHz channels are probed (ref hw_scan_construct_channel_list_tlv)
 auto channel_scannable(const S1gChannel& channel) -> bool {
@@ -116,93 +90,87 @@ auto pack_channel(const S1gChannel& channel, const u32 pwr_idx) -> u32 {
 
 // probe request frame: pv0 mgmt header + ssid ie + s1g capabilities ie
 // (ref umac/frames/probe_request.c)
-auto build_probe_request(Builder& b, const u8 (&mac)[dot11::mac_len], const noxx::StringView ssid) -> void {
+auto build_probe_request(BufWriter& w, const dot11::MacAddr& mac, const noxx::StringView ssid) -> bool {
+    constexpr auto error_value = false;
+
     // mgmt header, da/bssid broadcast
-    b.put_u16(dot11::Fc::ProbeReq); // frame control
-    b.put_u16(0);                   // duration
-    b.put_bytes(broadcast_mac, dot11::mac_len);
-    b.put_bytes(mac, dot11::mac_len);
-    b.put_bytes(broadcast_mac, dot11::mac_len);
-    b.put_u16(0); // sequence control
+    unwrap(header, w.append<dot11::Header>());
+    header = {
+        .frame_control = dot11::Fc::ProbeReq,
+        .addr1         = broadcast_mac,
+        .addr2         = mac,
+        .addr3         = broadcast_mac,
+    };
 
     // ssid ie, empty = wildcard
-    b.put(dot11::Ie::Ssid);
-    b.put(u8(ssid.size()));
-    b.put_bytes((const u8*)ssid.data(), ssid.size());
+    unwrap(ssid_ie, w.append<dot11::IeHeader>());
+    ssid_ie = {dot11::Ie::Ssid, u8(ssid.size())};
+    ensure(w.append(ssid.data(), ssid.size()) != nullptr);
 
-    // s1g capabilities ie: 10 info bytes + 5 mcs/nss bytes
-    // (ref ie_s1g_capabilities_build)
-    auto caps = noxx::Array<u8, 15>();
-    caps[0]   = dot11::S1gCap0::SuppWidth1248Mhz;
-    caps[4]   = dot11::S1gCap4::StaTypeNonSensor;
-    caps[7]   = dot11::S1gCap7::Dup1MhzSupport;
-    // mcs map: 1ss up to mcs 7, 2-4ss unsupported; stored once, then again
-    // shifted across bytes 2-3 (rx/tx halves, as the reference builder does)
-    constexpr auto mcs_map = u8(dot11::S1gNssMaxMcs::Mcs7 << 0 |
-                                dot11::S1gNssMaxMcs::None << 2 |
-                                dot11::S1gNssMaxMcs::None << 4 |
-                                dot11::S1gNssMaxMcs::None << 6);
-    caps[10]               = mcs_map;
-    caps[12]               = u8(mcs_map << 1);
-    caps[13]               = u8(mcs_map >> 7);
-    b.put(dot11::Ie::S1gCapabilities);
-    b.put(caps.size());
-    b.put_bytes(caps.data, caps.size());
+    unwrap(caps, w.append<dot11::S1gCaps>());
+    caps = make_s1g_capabilities();
+    return true;
 }
 
 // hw scan request payload: flags, dwell, then chan list / power list / probe request tlvs
-auto build_hw_scan_req(Builder& b, const Regdom& regdom, const u8 (&mac)[dot11::mac_len], const noxx::StringView ssid) -> void {
-    b.put_u32(HwScanFlag::Start);
-    b.put_u32(dwell_time_ms);
+auto build_hw_scan_req(BufWriter& w, const Regdom& regdom, const dot11::MacAddr& mac, const noxx::StringView ssid) -> bool {
+    constexpr auto error_value = false;
+
+    unwrap(req, w.append<HwScanReq>());
+    req = {
+        .flags         = HwScanFlag::Start,
+        .dwell_time_ms = dwell_time_ms,
+    };
 
     auto powers = PowerList();
-    auto len_at = b.begin_tlv(HwScanTlv::ChanList);
+    unwrap(chan_tlv, w.append<HwScanTlvHeader>());
+    chan_tlv = {.tag = HwScanTlvTag::ChanList};
     for(auto i = u32(0); i < regdom.num_channels; i += 1) {
         const auto& channel = regdom.channels[i];
         if(channel_scannable(channel)) {
-            b.put_u32(pack_channel(channel, powers.index_of(channel.max_tx_eirp_dbm)));
+            const auto word = pack_channel(channel, powers.index_of(channel.max_tx_eirp_dbm));
+            ensure(w.append(&word, sizeof(word)) != nullptr);
+            chan_tlv.len += sizeof(word);
         }
     }
-    b.end_tlv(len_at);
 
-    len_at = b.begin_tlv(HwScanTlv::PowerList);
+    unwrap(power_tlv, w.append<HwScanTlvHeader>());
+    power_tlv = {.tag = HwScanTlvTag::PowerList};
     for(auto i = u32(0); i < powers.count; i += 1) {
-        b.put_u32(u32(i32(powers.eirp_dbm[i]) * qdbm_per_dbm));
+        const auto qdbm = u32(i32(powers.eirp_dbm[i]) * qdbm_per_dbm);
+        ensure(w.append(&qdbm, sizeof(qdbm)) != nullptr);
+        power_tlv.len += sizeof(qdbm);
     }
-    b.end_tlv(len_at);
 
-    len_at = b.begin_tlv(HwScanTlv::ProbeReq);
-    build_probe_request(b, mac, ssid);
-    b.end_tlv(len_at);
+    unwrap(probe_tlv, w.append<HwScanTlvHeader>());
+    probe_tlv              = {.tag = HwScanTlvTag::ProbeReq};
+    const auto probe_start = w.offset;
+    ensure(build_probe_request(w, mac, ssid));
+    probe_tlv.len = u16(w.offset - probe_start);
+    return true;
 }
 
 // record a probe response into results if it is new; returns updated count.
 // from-air frames arrive on the data channel regardless of 802.11 type,
 // dispatch is on the frame control field
 auto process_mgmt_frame(const net::Packet& packet, const noxx::Span<ScanResult> results, const usize count) -> usize {
-    auto hdr_o = parse_skb_header(packet);
-    if(!hdr_o) {
+    const auto error_value = count;
+
+    unwrap(skbh, parse_skb_header(packet));
+    if(skbh.channel != SkbChan::Data && skbh.channel != SkbChan::Mgmt && skbh.channel != SkbChan::Beacon) {
         return count;
     }
-    const auto& hdr = *hdr_o;
-    if(hdr.channel != SkbChan::Data && hdr.channel != SkbChan::Mgmt && hdr.channel != SkbChan::Beacon) {
+    auto r = BufReader{packet_frame(packet, skbh), skbh.len};
+    if(skbh.rx_status.flags & RxFlag::FcsIncluded) {
+        ensure(r.size >= dot11::fcs_len);
+        r.size -= dot11::fcs_len;
+    }
+    unwrap(resp, r.read<dot11::ProbeResponse>());
+    if((resp.header.frame_control & dot11::Fc::VerTypeSubMask) != dot11::Fc::ProbeResp) {
         return count;
     }
-    const auto body = packet.data() + skb_hdr_size + hdr.offset;
-    auto       len  = usize(hdr.len);
-    if(hdr.rx_flags & RxFlag::FcsIncluded) {
-        if(len < dot11::fcs_len) {
-            return count;
-        }
-        len -= dot11::fcs_len;
-    }
-    if(len < dot11::ProbeResp::Ies ||
-       (get_u16(body + dot11::Hdr::FrameControl) & dot11::Fc::VerTypeSubMask) != dot11::Fc::ProbeResp) {
-        return count;
-    }
-    const auto bssid = body + dot11::Hdr::Addr3;
     for(auto i = usize(0); i < count; i += 1) {
-        if(mac_equal(results[i].bssid, bssid)) {
+        if(mac_equal(results[i].bssid.data, resp.header.addr3.data)) {
             return count; // duplicate
         }
     }
@@ -210,31 +178,52 @@ auto process_mgmt_frame(const net::Packet& packet, const noxx::Span<ScanResult> 
         return count;
     }
 
-    auto& res = results[count];
-    noxx::memcpy(res.bssid, bssid, dot11::mac_len);
-    res.beacon_interval = get_u16(body + dot11::ProbeResp::BeaconInterval);
-    res.capability_info = get_u16(body + dot11::ProbeResp::Capability);
-    res.rssi            = i16(hdr.rssi);
-    res.freq_100khz     = hdr.freq_100khz;
+    auto& res           = results[count];
+    res.bssid           = resp.header.addr3;
+    res.beacon_interval = resp.beacon_interval;
+    res.capability_info = resp.capability_info;
+    res.rssi            = i16(skbh.rx_status.rssi);
+    res.freq_100khz     = skbh.rx_status.freq_100khz;
     res.ssid_len        = 0;
-    res.has_s1g_op      = false;
 
     // pick the ssid and s1g operation ies
-    auto p   = body + dot11::ProbeResp::Ies;
-    auto end = body + len;
-    while(p + dot11::ie_hdr_size <= end && p + dot11::ie_hdr_size + p[1] <= end) {
-        if(p[0] == dot11::Ie::Ssid) {
-            res.ssid_len = p[1] < sizeof(res.ssid) ? p[1] : sizeof(res.ssid);
-            noxx::memcpy(res.ssid, p + dot11::ie_hdr_size, res.ssid_len);
-        } else if(p[0] == dot11::Ie::S1gOperation && p[1] >= dot11::S1gOp::Size) {
-            noxx::memcpy(res.s1g_op, p + dot11::ie_hdr_size, dot11::S1gOp::Size);
-            res.has_s1g_op = true;
+    while(r.size > 0) {
+        unwrap(ieh, r.read<dot11::IeHeader>());
+        unwrap(body, r.read(ieh.length));
+        switch(ieh.id) {
+        case dot11::Ie::Ssid:
+            res.ssid_len = noxx::min<usize>(ieh.length, sizeof(res.ssid));
+            noxx::memcpy(res.ssid, &body, res.ssid_len);
+            break;
+        case dot11::Ie::S1gOperation:
+            ensure(ieh.length + sizeof(dot11::IeHeader) >= sizeof(dot11::S1gOp));
+            res.s1g_op.emplace(*(const dot11::S1gOp*)&ieh);
+            break;
         }
-        p += dot11::ie_hdr_size + p[1];
     }
     return count + 1;
 }
 } // namespace
+
+auto make_s1g_capabilities() -> dot11::S1gCaps {
+    auto caps = dot11::S1gCaps{
+        .header = {dot11::Ie::S1gCapabilities, sizeof(dot11::S1gCaps) - sizeof(dot11::IeHeader)},
+    };
+    caps.s1g_capabilities_info[0] = dot11::S1gCap0::SuppWidth1248Mhz;
+    caps.s1g_capabilities_info[4] = dot11::S1gCap4::StaTypeNonSensor;
+    caps.s1g_capabilities_info[7] = dot11::S1gCap7::Dup1MhzSupport;
+    // mcs map: 1ss up to mcs 7, 2-4ss unsupported; stored once, then again
+    // shifted across bytes 2-3 (rx/tx halves, as the reference builder does)
+    constexpr auto mcs_map = u8(dot11::S1gNssMaxMcs::Mcs7 << 0 |
+                                dot11::S1gNssMaxMcs::None << 2 |
+                                dot11::S1gNssMaxMcs::None << 4 |
+                                dot11::S1gNssMaxMcs::None << 6);
+
+    caps.supported_s1g_mcs_and_nss_set[0] = mcs_map;
+    caps.supported_s1g_mcs_and_nss_set[2] = u8(mcs_map << 1);
+    caps.supported_s1g_mcs_and_nss_set[3] = u8(mcs_map >> 7);
+    return caps;
+}
 
 // the regdom matching the country the firmware's bcf was loaded with
 auto find_regdom() -> const Regdom* {
@@ -246,19 +235,19 @@ auto find_regdom() -> const Regdom* {
     return nullptr;
 }
 
-auto scan(const u8 (&mac)[dot11::mac_len], const noxx::StringView ssid, const noxx::Span<ScanResult> results) -> coop::Async<noxx::Optional<usize>> {
+auto scan(const dot11::MacAddr& mac, const noxx::StringView ssid, const noxx::Span<ScanResult> results) -> coop::Async<noxx::Optional<usize>> {
     constexpr auto error_value = noxx::nullopt;
 
     const auto regdom = find_regdom();
     co_ensure(regdom != nullptr, "no channel list for fw country");
 
-    // sta interface for the scan (ref struct morse_cmd_req_add_interface)
-    auto if_req = noxx::Array<u8, dot11::mac_len + 4>();
-    auto if_b   = Builder{{if_req.data, if_req.size()}};
-    if_b.put_bytes(mac, dot11::mac_len);
-    if_b.put_u32(InterfaceType::Sta);
+    // sta interface for the scan
+    const auto if_req = AddInterfaceReq{
+        .addr           = mac,
+        .interface_type = InterfaceType::Sta,
+    };
     auto vif = vif_invalid;
-    co_ensure(co_await send_command(CommandId::AddInterface, {if_req.data, if_b.offset}, {nullptr, 0}, vif_invalid, &vif));
+    co_ensure(co_await send_command(CommandId::AddInterface, as_span(if_req), {nullptr, 0}, vif_invalid, &vif));
     co_ensure(vif != vif_invalid, "no vif in add interface response");
     log<"halow: scan vif {} regdom {}\n">(vif, noxx::StringView(regdom->country, 2));
 
@@ -266,10 +255,9 @@ auto scan(const u8 (&mac)[dot11::mac_len], const noxx::StringView ssid, const no
     }
 
     auto req = noxx::Array<u8, hw_scan_req_max>();
-    auto b   = Builder{{req.data, req.size()}};
-    build_hw_scan_req(b, *regdom, mac, ssid);
-    co_ensure(!b.overflow, "hw scan request too long");
-    const auto started = co_await send_command(CommandId::HwScan, {req.data, b.offset}, {nullptr, 0}, vif);
+    auto w   = BufWriter{{req.data, req.size()}};
+    co_ensure(build_hw_scan_req(w, *regdom, mac, ssid), "hw scan request too long");
+    const auto started = co_await send_command(CommandId::HwScan, w.written(), {nullptr, 0}, vif);
 
     // collect probe responses until the scan done event
     auto count = usize(0);
@@ -295,11 +283,8 @@ auto scan(const u8 (&mac)[dot11::mac_len], const noxx::StringView ssid, const no
         }
         if(!done) {
             log<"halow: scan timeout, aborting\n">();
-            auto abort_req = noxx::Array<u8, 8>();
-            auto abort_b   = Builder{{abort_req.data, abort_req.size()}};
-            abort_b.put_u32(HwScanFlag::Abort);
-            abort_b.put_u32(0); // dwell time, unused
-            co_await send_command(CommandId::HwScan, {abort_req.data, abort_b.offset}, {nullptr, 0}, vif);
+            const auto abort_req = HwScanReq{.flags = HwScanFlag::Abort};
+            co_await send_command(CommandId::HwScan, as_span(abort_req), {nullptr, 0}, vif);
         }
     }
 

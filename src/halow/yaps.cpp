@@ -82,38 +82,33 @@ auto read_status(YapsStatus& status) -> coop::Async<bool> {
     }
 }
 
-auto yaps_tx(const u8 channel, net::Packet& packet, const TxInfo* const info) -> coop::Async<bool> {
+auto yaps_tx(const u8 channel, net::Packet& packet, const SkbHeader::TxInfo* const info) -> coop::Async<bool> {
     constexpr auto error_value = false;
 
     co_ensure(ready, "yaps not initialized");
     const auto payload_len = u32(packet.len);
-    const auto frame_len   = (skb_hdr_size + payload_len + 3) & ~u32(3);
+    const auto frame_len   = u32(sizeof(SkbHeader) + payload_len + 3) & ~u32(3);
     co_ensure(frame_len + yaps.reserved_page_size <= 0x3fff, "frame too long");
     co_ensure(packet.headroom() >= tx_headroom, "missing tx headroom");
-    co_ensure(packet.tailroom() >= frame_len - skb_hdr_size - payload_len, "missing pad tailroom");
+    co_ensure(packet.tailroom() >= frame_len - sizeof(SkbHeader) - payload_len, "missing pad tailroom");
 
     // frame: [delimiter][skb header][payload][pad to 4]
-    for(auto pad = frame_len - skb_hdr_size - payload_len; pad > 0; pad -= 1) {
+    for(auto pad = frame_len - sizeof(SkbHeader) - payload_len; pad > 0; pad -= 1) {
         *packet.append(1) = 0;
     }
-    const auto hdr = packet.prepend(skb_hdr_size);
+    const auto hdr = (SkbHeader*)packet.prepend(sizeof(SkbHeader));
     co_ensure(hdr != nullptr);
-    for(auto i = u32(0); i < skb_hdr_size; i += 1) {
-        hdr[i] = 0;
-    }
-    hdr[0] = skb_sync;
-    hdr[1] = channel;
-    put_u16(hdr + 2, payload_len);
+    *hdr = SkbHeader{
+        .sync    = skb_sync,
+        .channel = channel,
+        .len     = u16(payload_len),
+    };
     if(info != nullptr) {
-        // tx_info union: flags @8, pkt_id @12, tid @16, rates[0] {rc u32, count u8} @20
-        put_u32(hdr + 8, info->flags);
-        put_u32(hdr + 12, info->pkt_id);
-        hdr[16] = info->tid;
-        put_u32(hdr + 20, info->rate);
-        hdr[24] = info->attempts;
+        hdr->tx_info = *info;
     }
     const auto queue = tc_queue_for_channel(channel);
-    put_u32(packet.prepend(4), make_delim(frame_len + yaps.reserved_page_size, queue.pool_id, true));
+    const auto delim = make_delim(frame_len + yaps.reserved_page_size, queue.pool_id, true);
+    noxx::memcpy(packet.prepend(4), &delim, 4);
 
     // wait for room in the chip queue and its page pool
     const auto pages_needed = (frame_len + yaps.reserved_page_size + yaps_page_size - 1) / yaps_page_size + yaps_extra_pages;
@@ -148,7 +143,7 @@ auto yaps_rx() -> noxx::Optional<net::AutoPacket> {
     const auto padding  = (delim >> 17) & 0x3;
     ensure(raw_size > yaps.reserved_page_size, "rx delimiter too small");
     const auto total = raw_size - yaps.reserved_page_size + padding;
-    ensure(total % 4 == 0 && total >= skb_hdr_size && total <= yaps_max_rx, "bad rx frame size");
+    ensure(total % 4 == 0 && total >= sizeof(SkbHeader) && total <= yaps_max_rx, "bad rx frame size");
 
     auto packet = net::AutoPacket(net::packet_alloc());
     if(!packet) {
@@ -168,19 +163,12 @@ auto yaps_rx() -> noxx::Optional<net::AutoPacket> {
     return packet;
 }
 
-auto parse_skb_header(const net::Packet& packet) -> noxx::Optional<SkbHeader> {
-    constexpr auto error_value = noxx::nullopt;
+auto parse_skb_header(const net::Packet& packet) -> const SkbHeader* {
+    constexpr auto error_value = nullptr;
 
-    const auto p = packet.data();
-    ensure(packet.len >= skb_hdr_size && p[0] == skb_sync, "bad skb header");
-    auto hdr        = SkbHeader();
-    hdr.channel     = p[1];
-    hdr.len         = get_u16(p + 2);
-    hdr.offset      = p[4];
-    hdr.rx_flags    = get_u32(p + 8);
-    hdr.rssi        = get_u16(p + 16);
-    hdr.freq_100khz = get_u16(p + 18);
-    ensure(skb_hdr_size + hdr.offset + hdr.len <= packet.len, "truncated skb frame");
+    const auto hdr = (const SkbHeader*)packet.data();
+    ensure(packet.len >= sizeof(SkbHeader) && hdr->sync == skb_sync, "bad skb header");
+    ensure(sizeof(SkbHeader) + hdr->offset + hdr->len <= packet.len, "truncated skb frame");
     return hdr;
 }
 

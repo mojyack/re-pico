@@ -11,16 +11,16 @@
 // (ref umac/connection/umac_connection.c, umac/datapath/umac_datapath.c)
 namespace halow {
 struct LinkStatus {
-    u16  vif;
-    u16  aid;
-    u8   bssid[dot11::mac_len];
-    u8   mac[dot11::mac_len];
-    u32  freq_khz;
-    bool up = false;
+    u16            vif;
+    u16            aid;
+    dot11::MacAddr bssid;
+    dot11::MacAddr mac;
+    u32            freq_khz;
+    bool           up = false;
 };
 
 // scan for ssid and associate with open authentication
-auto connect(const u8 (&mac)[dot11::mac_len], noxx::StringView ssid) -> coop::Async<bool>;
+auto connect(const dot11::MacAddr& mac, noxx::StringView ssid) -> coop::Async<bool>;
 
 // deauthenticate and tear the interface down
 auto disconnect() -> coop::Async<bool>;
@@ -28,7 +28,7 @@ auto disconnect() -> coop::Async<bool>;
 auto link_status() -> const LinkStatus&;
 
 // send an ethernet-format frame (dst mac + ethertype + payload) over the link
-auto eth_tx(const u8* dst, u16 ethertype, noxx::Span<const u8> payload) -> coop::Async<bool>;
+auto eth_tx(const dot11::MacAddr& dst, u16 ethertype, noxx::Span<const u8> payload) -> coop::Async<bool>;
 
 // convert a received 802.11 data frame into an ethernet frame in place:
 // packet data will start at the 14-byte ethernet header. non-data frames

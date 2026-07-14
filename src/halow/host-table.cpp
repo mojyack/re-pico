@@ -8,71 +8,76 @@
 
 namespace halow {
 namespace {
-// host_table field offsets (ref morse_driver/hw.h struct host_table)
-constexpr auto tbl_firmware_flags = u32(12);
-constexpr auto tbl_ext_table_ptr  = u32(24);
+// leading host_table fields (ref morse_driver/hw.h struct host_table)
+struct HostTableHeader {
+    u32 magic_number;
+    u32 fw_version_number;
+    u32 host_flags;
+    u32 firmware_flags; // FwFlag
+    u32 memcmd_cmd_addr;
+    u32 memcmd_resp_addr;
+    u32 extended_host_table_addr;
+} __attribute__((packed));
 
-// extended_host_table layout (ref morse_driver/ext_host_table.h): total length,
-// mac address, then tlvs whose length field includes the 4-byte tlv header
-constexpr auto ext_mac_off  = u32(4);
-constexpr auto ext_tlvs_off = u32(10);
-constexpr auto ext_max_len  = u32(1024); // sanity bound
+// extended host table (ref morse_driver/ext_host_table.h)
 
-constexpr auto tag_yaps_table = u16(3); // MORSE_FW_HOST_TABLE_TAG_YAPS_TABLE
-constexpr auto yaps_tlv_size  = u32(36);
+// enum morse_fw_extended_host_table_tag
+struct ExtTableTag {
+    enum : u16 {
+        S1gCapabilities     = 0,
+        PagerBypassTxStatus = 1,
+        InsertSkbChecksum   = 2,
+        YapsTable           = 3,
+        PagerPktMemory      = 4,
+        PagerBypassCmdResp  = 5,
+    };
+};
 
-// tlv payload mirrors struct morse_yaps_hw_table (flags u8 + padding, then fields)
-auto parse_yaps_table(const u8* const p, YapsTable& yaps) -> void {
-    yaps.ysl_addr            = get_u32(p + 4);
-    yaps.yds_addr            = get_u32(p + 8);
-    yaps.status_regs_addr    = get_u32(p + 12);
-    yaps.tc_tx_pool_size     = get_u16(p + 16);
-    yaps.fc_rx_pool_size     = get_u16(p + 18);
-    yaps.tc_cmd_pool_size    = p[20];
-    yaps.tc_beacon_pool_size = p[21];
-    yaps.tc_mgmt_pool_size   = p[22];
-    yaps.fc_resp_pool_size   = p[23];
-    yaps.fc_tx_sts_pool_size = p[24];
-    yaps.fc_aux_pool_size    = p[25];
-    yaps.tc_tx_q_size        = p[26];
-    yaps.tc_cmd_q_size       = p[27];
-    yaps.tc_beacon_q_size    = p[28];
-    yaps.tc_mgmt_q_size      = p[29];
-    yaps.fc_q_size           = p[30];
-    yaps.fc_done_q_size      = p[31];
-    yaps.reserved_page_size  = get_u16(p + 32);
-}
+// struct extended_host_table_tlv_hdr; the length includes this header
+struct ExtTableTlvHeader {
+    u16 tag; // ExtTableTag
+    u16 length;
+} __attribute__((packed));
+
+// struct extended_host_table; tlvs follow
+struct ExtTableHeader {
+    u32 extended_host_table_length;
+    u8  dev_mac_addr[6];
+} __attribute__((packed));
+
+constexpr auto ext_max_len = u32(1024); // sanity bound
 } // namespace
 
 auto parse_host_table(const u32 host_table_ptr) -> noxx::Optional<HostTable> {
     constexpr auto error_value = noxx::nullopt;
 
-    auto table = HostTable();
-    unwrap(fw_flags, read_u32(host_table_ptr + tbl_firmware_flags));
-    table.firmware_flags = fw_flags;
+    auto table  = HostTable();
+    auto header = HostTableHeader();
+    ensure(read_multi(host_table_ptr, (u8*)&header, sizeof(header)));
+    table.firmware_flags = header.firmware_flags;
 
-    unwrap(ext_ptr, read_u32(host_table_ptr + tbl_ext_table_ptr));
+    const auto ext_ptr = header.extended_host_table_addr;
     ensure(ext_ptr != 0, "no extended host table");
     unwrap(len, read_u32(ext_ptr));
-    ensure(len >= ext_tlvs_off && len <= ext_max_len, "bad extended host table length");
+    ensure(len >= sizeof(ExtTableHeader) && len <= ext_max_len, "bad extended host table length");
 
     const auto buf_len = (len + 3) & ~u32(3);
     const auto buf     = noxx::make_unique_array<u8>(buf_len);
     ensure(buf);
     ensure(read_multi(ext_ptr, buf.get(), buf_len));
-    noxx::memcpy(table.mac, buf.get() + ext_mac_off, sizeof(table.mac));
+    const auto ext = (const ExtTableHeader*)buf.get();
+    noxx::memcpy(table.mac.data, ext->dev_mac_addr, sizeof(ext->dev_mac_addr));
 
     auto found_yaps = false;
-    auto head       = ext_tlvs_off;
-    while(head + 4 <= len) {
-        const auto tag     = get_u16(buf.get() + head);
-        const auto tlv_len = u32(get_u16(buf.get() + head + 2));
-        ensure(tlv_len >= 4 && head + tlv_len <= len, "malformed tlv");
-        if(tag == tag_yaps_table && tlv_len >= 4 + yaps_tlv_size) {
-            parse_yaps_table(buf.get() + head + 4, table.yaps);
+    auto head       = u32(sizeof(ExtTableHeader));
+    while(head + sizeof(ExtTableTlvHeader) <= len) {
+        const auto tlv = (const ExtTableTlvHeader*)(buf.get() + head);
+        ensure(tlv->length >= sizeof(ExtTableTlvHeader) && head + tlv->length <= len, "malformed tlv");
+        if(tlv->tag == ExtTableTag::YapsTable && tlv->length >= sizeof(ExtTableTlvHeader) + sizeof(YapsTable)) {
+            noxx::memcpy(&table.yaps, buf.get() + head + sizeof(ExtTableTlvHeader), sizeof(YapsTable));
             found_yaps = true;
         }
-        head += tlv_len;
+        head += tlv->length;
     }
     ensure(found_yaps, "no yaps table tlv");
     return table;

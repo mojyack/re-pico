@@ -1,9 +1,10 @@
 #pragma once
-#include <noxx/int.hpp>
+#include <noxx/array.hpp>
 
 // 802.11 frame constants (ref dot11/dot11.h, dot11/dot11_frames.h)
 namespace halow::dot11 {
-constexpr auto mac_len = usize(6);
+using MacAddr = noxx::Array<u8, 6>;
+
 constexpr auto fcs_len = usize(4);
 
 // frame control: version[1:0] | type[3:2] | subtype[7:4] | flags[15:8]
@@ -29,13 +30,13 @@ struct Fc {
         SubS1gBeacon = 1 << 4,
         S1gBeacon    = TypeExt | SubS1gBeacon,
 
-        ProbeReq   = TypeMgmt | SubProbeReq,
-        ProbeResp  = TypeMgmt | SubProbeResp,
-        AssocReq   = TypeMgmt | SubAssocReq,
-        AssocResp  = TypeMgmt | SubAssocResp,
-        Auth       = TypeMgmt | SubAuth,
-        Deauth     = TypeMgmt | SubDeauth,
-        QosData    = TypeData | SubQosData,
+        ProbeReq  = TypeMgmt | SubProbeReq,
+        ProbeResp = TypeMgmt | SubProbeResp,
+        AssocReq  = TypeMgmt | SubAssocReq,
+        AssocResp = TypeMgmt | SubAssocResp,
+        Auth      = TypeMgmt | SubAuth,
+        Deauth    = TypeMgmt | SubDeauth,
+        QosData   = TypeData | SubQosData,
 
         // flag bits in the high byte
         ToDs      = 1 << 8,
@@ -67,62 +68,67 @@ struct CapInfo {
 
 constexpr auto status_success = u16(0);
 
-// pv0 mgmt header byte offsets (struct dot11_hdr)
-struct Hdr {
-    enum : u32 {
-        FrameControl = 0,
-        Duration     = 2,
-        Addr1        = 4,  // destination
-        Addr2        = 10, // source
-        Addr3        = 16, // bssid for mgmt frames
-        SeqCtrl      = 22,
-        Size         = 24,
-    };
-};
+// pv0 mgmt header (struct dot11_hdr)
+struct Header {
+    u16     frame_control;
+    u16     duration;
+    MacAddr addr1;
+    MacAddr addr2;
+    MacAddr addr3;
+    u16     sequence_control;
+} __attribute__((packed));
 
-// probe response / beacon body offsets (struct dot11_probe_response)
-struct ProbeResp {
-    enum : u32 {
-        Timestamp      = Hdr::Size,
-        BeaconInterval = Hdr::Size + 8,
-        Capability     = Hdr::Size + 10,
-        Ies            = Hdr::Size + 12,
-    };
-};
+static_assert(sizeof(Header) == 24);
 
-// authentication frame body offsets (struct dot11_auth_hdr + dot11_auth_seq_status)
+// probe response / beacon (struct dot11_probe_response)
+struct ProbeResponse {
+    Header header;
+    u8     timestamp[8];
+    u16    beacon_interval;
+    u16    capability_info;
+    u8     ies[];
+} __attribute__((packed));
+
+// authentication frame body (struct dot11_auth_hdr + dot11_auth_seq_status)
 struct Auth {
-    enum : u32 {
-        Alg    = Hdr::Size,
-        Seq    = Hdr::Size + 2,
-        Status = Hdr::Size + 4,
-        Size   = Hdr::Size + 6,
-    };
-};
+    Header header;
+    u16    alg;
+    u16    seq;
+    u16    status_code;
+} __attribute__((packed));
 
-// association request body offsets (struct dot11_assoc_req)
+// association request body (struct dot11_assoc_req)
 struct AssocReq {
-    enum : u32 {
-        Capability     = Hdr::Size,
-        ListenInterval = Hdr::Size + 2,
-        Ies            = Hdr::Size + 4,
-    };
-};
+    Header header;
+    u16    capability;
+    u16    listen_interval;
+    u8     ies[];
+} __attribute__((packed));
 
-// association response body offsets (struct dot11_assoc_rsp, s1g format: no aid field)
+// association response body (struct dot11_assoc_rsp, s1g format: no aid field)
 struct AssocResp {
-    enum : u32 {
-        Capability = Hdr::Size,
-        Status     = Hdr::Size + 2,
-        Ies        = Hdr::Size + 4,
-    };
-};
+    Header header;
+    u16    capability;
+    u16    status_code;
+    u8     ies[];
+} __attribute__((packed));
 
-// qos data frame offsets (struct dot11_data_hdr, 3-address + qos control)
+// qos data frame header (struct dot11_data_hdr, 3-address + qos control)
 struct QosData {
-    enum : u32 {
-        QosCtrl = Hdr::Size,
-        Size    = Hdr::Size + 2,
+    Header header;
+    u16    qos_control;
+} __attribute__((packed));
+
+// deauthentication frame body (struct dot11_deauth)
+struct Deauth {
+    Header header;
+    u16    reason_code; // Reason
+} __attribute__((packed));
+
+// reason codes (DOT11_REASON_*)
+struct Reason {
+    enum : u16 {
+        DeauthLeaving = 3,
     };
 };
 
@@ -135,10 +141,15 @@ struct Ie {
         ShortBcnInt     = 214,
         S1gCapabilities = 217,
         VendorSpecific  = 221,
-        S1gOperation    = 232,
+        S1gOperation    = 232, // S1gOp
     };
 };
-constexpr auto ie_hdr_size = usize(2); // element id + length
+
+struct IeHeader {
+    u8 id;
+    u8 length;
+    // u8 data[];
+} __attribute__((packed));
 
 // s1g capabilities information bits (DOT11_S1G_CAP*, one enum per info byte)
 struct S1gCap0 {
@@ -149,12 +160,14 @@ struct S1gCap0 {
         SuppWidth124816Mhz = 3 << 6,
     };
 };
+
 struct S1gCap4 {
     enum : u8 {
         StaTypeSensor    = 1 << 6,
         StaTypeNonSensor = 2 << 6,
     };
 };
+
 struct S1gCap7 {
     enum : u8 {
         Dup1MhzSupport = 1 << 1,
@@ -171,25 +184,34 @@ struct S1gNssMaxMcs {
     };
 };
 
-// s1g operation ie body offsets (struct dot11_ie_s1g_operation, after the ie header)
-struct S1gOp {
-    enum : u32 {
-        ChannelWidth   = 0, // S1gOpWidth bits
-        OperatingClass = 1,
-        PrimChanNum    = 2,
-        OpChanNum      = 3, // channel center frequency, as an s1g channel number
-        Size           = 6,
-    };
-};
-
 // s1g operation channel width byte bits (DOT11_MASK_S1G_OP_CHAN_WIDTH_*)
 struct S1gOpWidth {
     enum : u8 {
-        PrimIs1Mhz  = 1 << 0, // set: 1MHz primary, clear: 2MHz primary
-        OpWidthMask = 0xf << 1, // operating width minus one
-        PrimLoc     = 1 << 5, // upper/lower 1MHz of the primary channel
+        PrimIs1Mhz = 0b0000'0001, // set: 1MHz primary, clear: 2MHz primary
+        OpWidth    = 0b0001'1110, // operating width minus one
+        PrimLoc    = 0b0010'0000, // upper/lower 1MHz of the primary channel
+        NoMcs10    = 0b1000'0000,
     };
 };
+
+// s1g capabilities ie body (struct dot11_ie_s1g_capabilities)
+struct S1gCaps {
+    IeHeader header;
+    u8       s1g_capabilities_info[10]; // S1gCap<n> bits per byte
+    u8       supported_s1g_mcs_and_nss_set[5];
+} __attribute__((packed));
+static_assert(sizeof(S1gCaps) == 17);
+
+// s1g operation ie body (struct dot11_ie_s1g_operation)
+struct S1gOp {
+    IeHeader header;
+    u8       channel_width; // S1gOpWidth
+    u8       operating_class;
+    u8       primary_channel_number;
+    u8       channel_center_freq;
+    u8       basic_s1g_mcs_nss_set[2];
+} __attribute__((packed));
+static_assert(sizeof(S1gOp) == 8);
 
 // llc/snap header for 802.11 data payloads (rfc 1042)
 constexpr u8   llc_snap[]   = {0xaa, 0xaa, 0x03, 0x00, 0x00, 0x00};

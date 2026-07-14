@@ -13,18 +13,6 @@
 
 namespace halow {
 namespace {
-// command header (ref common/morse_commands.h struct morse_cmd_header)
-constexpr auto cmd_hdr_size = u32(12);
-
-// header flags field (ref MORSE_CMD_TYPE_*)
-struct CmdFlag {
-    enum : u16 {
-        Req   = 1 << 0,
-        Resp  = 1 << 1,
-        Event = 1 << 2,
-    };
-};
-
 constexpr auto host_id_seq_mask = u16(0xfff0);
 
 constexpr auto response_timeout_us = u64(600'000);
@@ -38,31 +26,34 @@ auto           event_ring      = noxx::Array<u32, event_ring_size>();
 auto           event_head      = u32(0);
 auto           event_count     = u32(0);
 
-// the command payload of a frame, or null if it is not a command frame
-auto command_payload(const net::Packet& packet) -> const u8* {
-    auto hdr_o = parse_skb_header(packet);
-    if(!hdr_o || (*hdr_o).channel != SkbChan::Command || (*hdr_o).len < cmd_hdr_size) {
+// the command header of a frame, or null if it is not a command frame;
+// the header's own len field is validated against the skb frame
+auto command_payload(const net::Packet& packet) -> const CommandHeader* {
+    const auto skbh = parse_skb_header(packet);
+    if(skbh == nullptr || skbh->channel != SkbChan::Command || skbh->len < sizeof(CommandHeader)) {
         return nullptr;
     }
-    return packet.data() + skb_hdr_size + (*hdr_o).offset;
+    const auto header = (const CommandHeader*)packet_frame(packet, *skbh);
+    if(sizeof(CommandHeader) + header->len > skbh->len) {
+        return nullptr;
+    }
+    return header;
 }
 
 // consume a command-channel frame that is not the awaited response
-auto log_stray_command(const u8* const cmd) -> void {
-    const auto flags = get_u16(cmd);
-    if(flags & CmdFlag::Event) {
-        const auto id  = get_u16(cmd + 2);
-        const auto len = get_u16(cmd + 4);
-        log<"halow: event 0x{04x} len {}\n">(id, len);
+auto log_stray_command(const CommandHeader& header) -> void {
+    if(header.flags & CommandFlag::Event) {
+        log<"halow: event 0x{04x} len {}\n">(header.message_id, header.len);
         if(event_count < event_ring_size) {
-            const auto payload0 = len >= 1 ? cmd[cmd_hdr_size] : u8(0);
-            event_ring[(event_head + event_count) % event_ring_size] = u32(id) | u32(payload0) << 16;
+            const auto payload0 = header.len >= 1 ? *(const u8*)(&header + 1) : u8(0);
+
+            event_ring[(event_head + event_count) % event_ring_size] = u32(header.message_id) | u32(payload0) << 16;
             event_count += 1;
         } else {
             log<"halow: event ring full, dropping event\n">();
         }
     } else {
-        log<"halow: stray response 0x{04x}:0x{04x}\n">(get_u16(cmd + 2), get_u16(cmd + 6));
+        log<"halow: stray response 0x{04x}:0x{04x}\n">(header.message_id, header.host_id);
     }
 }
 } // namespace
@@ -80,15 +71,16 @@ auto send_command(const u16 id, const noxx::Span<const u8> req, const noxx::Span
     const auto packet = net::AutoPacket(net::packet_alloc(tx_headroom));
     co_ensure(packet.get() != nullptr);
 
-    const auto cmd = packet->append(cmd_hdr_size + req.size);
-    co_ensure(cmd != nullptr, "command too long");
-    put_u16(cmd + 0, CmdFlag::Req);
-    put_u16(cmd + 2, id);
-    put_u16(cmd + 4, req.size);
-    put_u16(cmd + 6, host_id);
-    put_u16(cmd + 8, vif);
-    put_u16(cmd + 10, 0);
-    noxx::memcpy(cmd + cmd_hdr_size, req.data, req.size);
+    co_unwrap(header, (CommandHeader*)packet->append(sizeof(CommandHeader)));
+    header = CommandHeader{
+        .flags      = CommandFlag::Req,
+        .message_id = id,
+        .len        = u16(req.size),
+        .host_id    = host_id,
+        .vif_id     = vif,
+    };
+    co_unwrap(payload, packet->append(req.size));
+    noxx::memcpy(&payload, req.data, req.size);
     co_ensure(co_await yaps_tx(SkbChan::Command, *packet));
 
     // await the matching response, backlogging unrelated frames meanwhile
@@ -105,26 +97,22 @@ auto send_command(const u16 id, const noxx::Span<const u8> req, const noxx::Span
             push_rx_backlog(rx.get());
             continue;
         }
-        const auto flags = get_u16(rcmd);
-        const auto rid   = get_u16(rcmd + 2);
-        const auto rlen  = u32(get_u16(rcmd + 4));
-        const auto rhid  = get_u16(rcmd + 6);
-        if(!(flags & CmdFlag::Resp) || rid != id || (rhid & host_id_seq_mask) != host_id) {
-            log_stray_command(rcmd);
+        if(!(rcmd->flags & CommandFlag::Resp) || rcmd->message_id != id || (rcmd->host_id & host_id_seq_mask) != host_id) {
+            log_stray_command(*rcmd);
             continue;
         }
-        co_ensure(rlen >= 4 && skb_hdr_size + cmd_hdr_size + rlen <= rx->len, "malformed response");
-        const auto fw_status = get_u32(rcmd + cmd_hdr_size);
-        if(fw_status != 0) {
-            log<"halow: command 0x{04x} failed with status {}\n">(id, i32(fw_status));
+        const auto rresp = (const CommandResponse*)rcmd;
+        co_ensure(rcmd->len >= sizeof(rresp->status), "malformed response");
+        if(rresp->status != 0) {
+            log<"halow: command 0x{04x} failed with status {}\n">(id, i32(rresp->status));
             co_return noxx::nullopt;
         }
         if(resp_vif != nullptr) {
-            *resp_vif = get_u16(rcmd + 8);
+            *resp_vif = rcmd->vif_id;
         }
-        const auto data_len = usize(rlen - 4);
+        const auto data_len = usize(rcmd->len - sizeof(rresp->status));
         const auto copy_len = data_len < resp.size ? data_len : resp.size;
-        noxx::memcpy(resp.data, rcmd + cmd_hdr_size + 4, copy_len);
+        noxx::memcpy(resp.data, rresp->data, copy_len);
         co_return usize(copy_len);
     }
 }
@@ -150,7 +138,7 @@ auto fetch_rx() -> coop::Async<noxx::Optional<net::AutoPacket>> {
         co_return net::AutoPacket();
     }
     if(const auto cmd = command_payload(*rx); cmd != nullptr) {
-        log_stray_command(cmd);
+        log_stray_command(*cmd);
         co_return net::AutoPacket();
     }
     co_return move(rx);
