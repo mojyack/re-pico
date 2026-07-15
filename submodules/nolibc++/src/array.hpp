@@ -17,14 +17,26 @@ struct Array {
     }
 
     operator Span<T>() {
-        return Span<T>{.data = data, .size = N};
+        return {data, N};
     }
 
     operator Span<const T>() const {
-        return Span<const T>{.data = data, .size = N};
+        return {data, N};
     }
 
-    constexpr auto size() const -> usize {
+    operator Span<T, N>() {
+        return {data};
+    }
+
+    operator Span<const T, N>() const {
+        return {data};
+    }
+
+    constexpr auto operator==(const Array& other) const -> bool {
+        return Span<const T>(*this) == Span<const T>(other);
+    }
+
+    constexpr static auto size() -> usize {
         return N;
     }
 };
@@ -50,5 +62,11 @@ constexpr auto to_array(const T (&list)[N]) -> Array<T, N> {
 }
 
 template <class T, usize N>
-Span(Array<T, N>&) -> Span<T>;
+Span(Array<T, N>&) -> Span<T, N>;
+
+template <class T, usize N, class U, usize M>
+    requires(is_same<RemoveCv<U>, T>)
+constexpr auto operator==(const Array<T, N>& array, const Span<U, M> span) -> bool {
+    return Span<const T>(array) == span;
+}
 } // namespace noxx

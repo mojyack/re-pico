@@ -104,11 +104,15 @@ struct Vector {
     }
 
     operator Span<T>() {
-        return Span<T>{.data = ptr, .size = length};
+        return {ptr, length};
     }
 
     operator Span<const T>() const {
-        return Span<T>{.data = ptr, .size = length};
+        return {ptr, length};
+    }
+
+    auto operator==(const Vector& other) const -> bool {
+        return Span<const T>(*this) == Span<const T>(other);
     }
 
     Vector() = default;
@@ -124,6 +128,12 @@ struct Vector {
 
 template <class T>
 Span(Vector<T>&) -> Span<T>;
+
+template <class T, class U, usize M>
+    requires(is_same<RemoveCv<U>, T>)
+constexpr auto operator==(const Vector<T>& vector, const Span<U, M> span) -> bool {
+    return Span<const T>(vector) == span;
+}
 } // namespace noxx
 
 #include "assert.hpp"
