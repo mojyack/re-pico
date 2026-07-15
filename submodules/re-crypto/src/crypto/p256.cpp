@@ -151,6 +151,52 @@ auto sqrt(const Bn256& a) -> noxx::Optional<Bn256> {
     return fp.from_mont(s);
 }
 
+auto sswu(const Bn256& u) -> Point {
+    // all arithmetic in the montgomery domain; a = -3, z = -10
+    const auto a  = fp.sub(Bn256(), fp.to_mont(Bn256::from_u32(3)));
+    const auto b  = fp.to_mont(coeff_b);
+    const auto z  = fp.sub(Bn256(), fp.to_mont(Bn256::from_u32(10)));
+    const auto um = fp.to_mont(u);
+
+    // m = z^2*u^4 + z*u^2 = t1 + t1^2 where t1 = z*u^2
+    const auto u2 = fp.sqr(um);
+    const auto t1 = fp.mul(z, u2);
+    const auto m  = fp.add(t1, fp.sqr(t1));
+
+    // t = 1/m (or 0 when m == 0)
+    const auto m_is_zero = m.is_zero();
+    const auto t         = m_is_zero ? Bn256() : fp.inv(m);
+
+    // x1 = CSEL(m==0, b/(z*a), (-b/a)*(1+t))
+    const auto x1a = fp.mul(b, fp.inv(fp.mul(z, a)));
+    const auto x1b = fp.mul(fp.mul(fp.sub(Bn256(), b), fp.inv(a)), fp.add(fp.one_m, t));
+    const auto x1  = m_is_zero ? x1a : x1b;
+
+    const auto gx1 = fp.add(fp.add(fp.mul(fp.sqr(x1), x1), fp.mul(a, x1)), b);
+    const auto x2  = fp.mul(fp.mul(z, u2), x1);
+    const auto gx2 = fp.add(fp.add(fp.mul(fp.sqr(x2), x2), fp.mul(a, x2)), b);
+
+    // gx1 is a QR iff gx1^((p-1)/2) is 0 or 1
+    auto pm1 = Bn256();
+    bn_sub(pm1, prime, Bn256::from_u32(1));
+    const auto legendre  = fp.exp(gx1, bn_rshift1(pm1));
+    const auto gx1_is_qr = legendre.is_zero() || legendre == fp.one_m;
+
+    const auto x = fp.from_mont(gx1_is_qr ? x1 : x2);
+    const auto v = gx1_is_qr ? gx1 : gx2;
+
+    // y = sqrt(v) = v^((p+1)/4) since p == 3 mod 4
+    auto pp1 = Bn256();
+    bn_add(pp1, prime, Bn256::from_u32(1));
+    auto y = fp.from_mont(fp.exp(v, bn_rshift1(bn_rshift1(pp1))));
+
+    // flip y so its parity matches u's
+    if((y.w[0] & 1) != (u.w[0] & 1)) {
+        bn_sub(y, prime, y);
+    }
+    return Point{x, y};
+}
+
 auto scalar_add(const Bn256& a, const Bn256& b) -> Bn256 {
     return bn_mod_add(a, b, order);
 }

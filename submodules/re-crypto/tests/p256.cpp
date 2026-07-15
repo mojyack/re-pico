@@ -10,18 +10,18 @@ namespace p256 = crypto::p256;
 using crypto::Bn256;
 
 auto bn(const char* const hex) -> Bn256 {
-    u8 bytes[32] = {};
-    if(test::from_hex(hex, bytes, sizeof(bytes)) != 32) {
+    auto bytes = noxx::Array<u8, 32>();
+    if(test::from_hex(hex, bytes) != bytes.size()) {
         printf("bad test vector: %s\n", hex);
         return Bn256();
     }
-    return Bn256::from_be_bytes(bytes);
+    return Bn256::from_be_bytes(bytes.data);
 }
 
 auto bn_matches(const Bn256& v, const char* const hex) -> bool {
-    u8 bytes[32];
-    v.to_be_bytes(bytes);
-    ensure(test::matches(bytes, sizeof(bytes), hex));
+    auto bytes = noxx::Array<u8, 32>();
+    v.to_be_bytes(bytes.data);
+    ensure(test::matches(bytes, hex));
     return true;
 }
 

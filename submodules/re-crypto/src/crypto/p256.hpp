@@ -34,6 +34,10 @@ auto negate(const Point& p) -> Point;
 auto is_quadratic_residue(const Bn256& a) -> bool;
 auto sqrt(const Bn256& a) -> noxx::Optional<Bn256>; // nullopt if a is not a QR
 
+// Simplified SWU map-to-curve (RFC 9380) with z = -10, used by SAE
+// hash-to-element (IEEE 802.11 12.4.4.3.3). u must be < p; result is on-curve.
+auto sswu(const Bn256& u) -> Point;
+
 // scalar (mod group order) helpers
 auto scalar_add(const Bn256& a, const Bn256& b) -> Bn256; // (a + b) mod order
 auto scalar_valid(const Bn256& s) -> bool;                // 1 < s < order (SAE range)

@@ -3,17 +3,17 @@
 
 namespace crypto {
 struct HmacSha256 {
-    Sha256 inner;
-    u8     outer_pad[Sha256::block_size];
+    Sha256        inner;
+    Sha256::Block outer_pad;
 
-    auto reset(const u8* key, usize key_size) -> void;
-    auto update(const u8* data, usize size) -> void;
-    auto finish(u8* mac /* Sha256::digest_size */) -> void;
+    auto reset(noxx::Span<const u8> key) -> void;
+    auto update(noxx::Span<const u8> data) -> void;
+    auto finish(Sha256::DigestMutRef mac) -> void;
 
-    HmacSha256(const u8* const key, const usize key_size) {
-        reset(key, key_size);
+    HmacSha256(const noxx::Span<const u8> key) {
+        reset(key);
     }
 };
 
-auto hmac_sha256(const u8* key, usize key_size, const u8* data, usize size, u8* mac) -> void;
+auto hmac_sha256(noxx::Span<const u8> key, noxx::Span<const u8> data, Sha256::DigestMutRef mac) -> void;
 } // namespace crypto

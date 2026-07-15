@@ -1,5 +1,6 @@
 #pragma once
 #include <noxx/array.hpp>
+#include <noxx/span.hpp>
 
 namespace crypto {
 // 256-bit unsigned integer, little-endian 32-bit limbs (w[0] = least significant)
@@ -114,6 +115,29 @@ constexpr auto bn_rshift1(const Bn256& a) -> Bn256 {
         if(i < 7) {
             r.w[i] |= a.w[i + 1] << 31;
         }
+    }
+    return r;
+}
+
+// r = (r << 1) | bit, returns the bit shifted out of the top
+constexpr auto bn_shl1(Bn256& r, const u32 bit) -> u32 {
+    const auto carry = r.w[7] >> 31;
+    for(auto i = usize(7); i > 0; i -= 1) {
+        r.w[i] = (r.w[i] << 1) | (r.w[i - 1] >> 31);
+    }
+    r.w[0] = (r.w[0] << 1) | (bit & 1);
+    return carry;
+}
+
+// reduce a big-endian octet string of any length modulo m (binary long division)
+constexpr auto bn_mod_bytes(const noxx::Span<const u8> be, const Bn256& m) -> Bn256 {
+    auto r = Bn256();
+    for(auto i = usize(0); i < be.size() * 8; i += 1) {
+        const auto bit    = u32(be[i / 8] >> (7 - i % 8)) & 1;
+        const auto carry  = bn_shl1(r, bit);
+        auto       s      = Bn256();
+        const auto borrow = bn_sub(s, r, m);
+        bn_cond_assign(r, s, u32(0) - (carry | (borrow ^ 1)));
     }
     return r;
 }

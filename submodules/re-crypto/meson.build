@@ -6,6 +6,10 @@ project(
 )
 
 add_project_arguments('-DNOXX_TEST', language: 'cpp')
+add_project_arguments(
+    '-Wno-missing-designated-field-initializers',
+    language: 'cpp',
+)
 
 inc = include_directories('src')
 
@@ -13,8 +17,11 @@ crypto_files = files(
     'src/crypto/aes-cmac.cpp',
     'src/crypto/aes-keywrap.cpp',
     'src/crypto/aes.cpp',
+    'src/crypto/eapol.cpp',
     'src/crypto/hmac-sha256.cpp',
+    'src/crypto/kdf.cpp',
     'src/crypto/p256.cpp',
+    'src/crypto/sae.cpp',
     'src/crypto/sha256.cpp',
 )
 
@@ -33,6 +40,8 @@ foreach name : [
     'aes-cmac',
     'aes-keywrap',
     'p256',
+    'sae',
+    'eapol',
 ]
     exe = executable(
         name + '-test',

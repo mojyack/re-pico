@@ -1,3 +1,4 @@
+#include <noxx/algorithm.hpp>
 #include <noxx/array.hpp>
 #include <noxx/platform.hpp>
 
@@ -73,15 +74,17 @@ constexpr auto round_constants = noxx::Array<u32, 64>{
     0xc67178f2,
 };
 
+constexpr auto block_size = Sha256::Block::size();
+
 constexpr auto rotr(const u32 v, const int n) -> u32 {
     return (v >> n) | (v << (32 - n));
 }
 
-auto compress(u32* const state, const u8* const block) -> void {
+auto compress(u32* const state, const noxx::Span<const u8> block) -> void {
     auto w = noxx::Array<u32, 64>();
     for(auto i = 0; i < 16; i += 1) {
-        const auto b = block + i * 4;
-        w[i]         = u32(b[0]) << 24 | u32(b[1]) << 16 | u32(b[2]) << 8 | u32(b[3]);
+        const auto b = i * 4;
+        w[i]         = u32(block[b]) << 24 | u32(block[b + 1]) << 16 | u32(block[b + 2]) << 8 | u32(block[b + 3]);
     }
     for(auto i = 16; i < 64; i += 1) {
         const auto s0 = rotr(w[i - 15], 7) ^ rotr(w[i - 15], 18) ^ (w[i - 15] >> 3);
@@ -121,32 +124,30 @@ auto Sha256::reset() -> void {
     total    = 0;
 }
 
-auto Sha256::update(const u8* data, usize size) -> void {
-    total += size;
+auto Sha256::update(noxx::Span<const u8> data) -> void {
+    total += data.size();
     if(buf_used != 0) {
-        const auto take = size < block_size - buf_used ? size : block_size - buf_used;
-        noxx::memcpy(buf + buf_used, data, take);
+        const auto take = noxx::min(data.size(), block_size - buf_used);
+        noxx::memcpy(buf.data + buf_used, data.data, take);
         buf_used += take;
-        data += take;
-        size -= take;
+        data = data.subspan(take);
         if(buf_used < block_size) {
             return;
         }
         compress(state, buf);
         buf_used = 0;
     }
-    while(size >= block_size) {
+    while(data.size() >= block_size) {
         compress(state, data);
-        data += block_size;
-        size -= block_size;
+        data = data.subspan(block_size);
     }
-    if(size != 0) {
-        noxx::memcpy(buf, data, size);
-        buf_used = size;
+    if(data.size() != 0) {
+        noxx::memcpy(buf.data, data.data, data.size());
+        buf_used = data.size();
     }
 }
 
-auto Sha256::finish(u8* const digest) -> void {
+auto Sha256::finish(const DigestMutRef digest) -> void {
     const auto bits = total * 8;
     buf[buf_used]   = 0x80;
     buf_used += 1;
@@ -172,9 +173,9 @@ auto Sha256::finish(u8* const digest) -> void {
     }
 }
 
-auto sha256(const u8* const data, const usize size, u8* const digest) -> void {
+auto sha256(noxx::Span<const u8> data, const Sha256::DigestMutRef digest) -> void {
     auto ctx = Sha256();
-    ctx.update(data, size);
+    ctx.update(data);
     ctx.finish(digest);
 }
 } // namespace crypto

@@ -1,3 +1,5 @@
+#include <noxx/algorithm.hpp>
+
 #include "crypto/sha256.hpp"
 #include "util.hpp"
 
@@ -7,9 +9,9 @@ namespace {
 constexpr auto error_value = false;
 
 auto digest_matches(const char* const message, const char* const hex) -> bool {
-    u8 digest[crypto::Sha256::digest_size];
-    crypto::sha256((const u8*)message, strlen(message), digest);
-    ensure(test::matches(digest, sizeof(digest), hex));
+    auto digest = crypto::Sha256::Digest();
+    crypto::sha256(test::to_span(message), digest);
+    ensure(test::matches(digest, hex));
     return true;
 }
 
@@ -23,29 +25,29 @@ auto known_vectors() -> bool {
 }
 
 auto million_a() -> bool {
-    auto ctx = crypto::Sha256();
-    u8   chunk[997]; // deliberately not block-aligned to exercise buffering
-    memset(chunk, 'a', sizeof(chunk));
+    auto ctx   = crypto::Sha256();
+    auto chunk = noxx::Array<u8, 997>(); // deliberately not block-aligned to exercise buffering
+    memset(chunk.data, 'a', chunk.size());
     auto remain = usize(1000000);
     while(remain > 0) {
-        const auto take = remain < sizeof(chunk) ? remain : sizeof(chunk);
-        ctx.update(chunk, take);
+        const auto take = noxx::min(remain, chunk.size());
+        ctx.update({chunk.data, take});
         remain -= take;
     }
-    u8 digest[crypto::Sha256::digest_size];
+    auto digest = crypto::Sha256::Digest();
     ctx.finish(digest);
-    ensure(test::matches(digest, sizeof(digest), "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0"));
+    ensure(test::matches(digest, "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0"));
     return true;
 }
 
 auto split_update() -> bool {
     const auto message = "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq";
     auto       ctx     = crypto::Sha256();
-    ctx.update((const u8*)message, 13);
-    ctx.update((const u8*)message + 13, strlen(message) - 13);
-    u8 digest[crypto::Sha256::digest_size];
+    ctx.update({(const u8*)message, 13});
+    ctx.update({(const u8*)message + 13, strlen(message) - 13});
+    auto digest = crypto::Sha256::Digest();
     ctx.finish(digest);
-    ensure(test::matches(digest, sizeof(digest), "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"));
+    ensure(test::matches(digest, "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"));
     return true;
 }
 } // namespace

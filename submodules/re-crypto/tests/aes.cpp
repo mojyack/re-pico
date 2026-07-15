@@ -7,16 +7,16 @@ namespace {
 constexpr auto error_value = false;
 
 auto roundtrip(const char* const key_hex, const char* const pt_hex, const char* const ct_hex) -> bool {
-    u8 key[crypto::Aes128::key_size];
-    u8 pt[crypto::Aes128::block_size];
-    ensure(test::from_hex(key_hex, key, sizeof(key)) == int(sizeof(key)));
-    ensure(test::from_hex(pt_hex, pt, sizeof(pt)) == int(sizeof(pt)));
+    auto key = crypto::Aes128::Key();
+    auto pt  = crypto::Aes128::Block();
+    ensure(test::from_hex(key_hex, key) == key.size());
+    ensure(test::from_hex(pt_hex, pt) == pt.size());
     const auto aes = crypto::Aes128(key);
-    u8 out[crypto::Aes128::block_size];
+    auto       out = crypto::Aes128::Block();
     aes.encrypt_block(pt, out);
-    ensure(test::matches(out, sizeof(out), ct_hex));
+    ensure(test::matches(out, ct_hex));
     aes.decrypt_block(out, out);
-    ensure(memcmp(out, pt, sizeof(pt)) == 0, "decrypt mismatch");
+    ensure(out == pt, "decrypt mismatch");
     return true;
 }
 } // namespace

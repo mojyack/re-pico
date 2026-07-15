@@ -1,24 +1,26 @@
 #pragma once
-#include <noxx/int.hpp>
+#include <noxx/array.hpp>
+
+#include "util.hpp"
 
 namespace crypto {
 struct Sha256 {
-    static constexpr auto block_size  = usize(64);
-    static constexpr auto digest_size = usize(32);
+    bytes_alias(Block, 64);
+    bytes_alias(Digest, 32);
 
     u32   state[8];
-    u8    buf[block_size];
+    Block buf;
     usize buf_used;
     u64   total;
 
     auto reset() -> void;
-    auto update(const u8* data, usize size) -> void;
-    auto finish(u8* digest /* digest_size */) -> void;
+    auto update(noxx::Span<const u8> data) -> void;
+    auto finish(DigestMutRef digest) -> void;
 
     Sha256() {
         reset();
     }
 };
 
-auto sha256(const u8* data, usize size, u8* digest) -> void;
+auto sha256(noxx::Span<const u8> data, Sha256::DigestMutRef digest) -> void;
 } // namespace crypto
