@@ -24,7 +24,7 @@ auto get_bits(BitReader& r, const u32 need) -> noxx::Optional<u32> {
 
     auto val = r.bitbuf;
     while(r.bitcnt < need) {
-        ensure(r.pos < r.src.size);
+        ensure(r.pos < r.src.size());
         val |= u32(r.src[r.pos]) << r.bitcnt;
         r.pos += 1;
         r.bitcnt += 8;
@@ -46,7 +46,7 @@ auto build(Huffman& h, noxx::Span<const u8> lengths) -> void {
     for(auto len = u32(0); len <= max_bits; len += 1) {
         h.count[len] = 0;
     }
-    for(auto sym = u32(0); sym < lengths.size; sym += 1) {
+    for(auto sym = u32(0); sym < lengths.size(); sym += 1) {
         h.count[lengths[sym]] += 1;
     }
     auto offsets = noxx::Array<u16, max_bits + 1>();
@@ -54,7 +54,7 @@ auto build(Huffman& h, noxx::Span<const u8> lengths) -> void {
     for(auto len = u32(1); len < max_bits; len += 1) {
         offsets[len + 1] = offsets[len] + h.count[len];
     }
-    for(auto sym = u32(0); sym < lengths.size; sym += 1) {
+    for(auto sym = u32(0); sym < lengths.size(); sym += 1) {
         if(lengths[sym] != 0) {
             h.symbol[offsets[lengths[sym]]] = sym;
             offsets[lengths[sym]] += 1;
@@ -106,7 +106,7 @@ auto inflate_codes(State& s, const Huffman& lit, const Huffman& dist) -> bool {
             return true; // end of block
         }
         if(sym < 256) {
-            ensure(s.dst_pos < s.dst.size);
+            ensure(s.dst_pos < s.dst.size());
             s.dst[s.dst_pos] = u8(sym);
             s.dst_pos += 1;
             continue;
@@ -120,7 +120,7 @@ auto inflate_codes(State& s, const Huffman& lit, const Huffman& dist) -> bool {
         ensure(dsym < max_dcodes);
         unwrap(dextra, get_bits(s.r, dist_extra[dsym]));
         const auto distance = u32(dist_base[dsym]) + u32(dextra);
-        ensure(distance <= s.dst_pos && s.dst_pos + length <= s.dst.size);
+        ensure(distance <= s.dst_pos && s.dst_pos + length <= s.dst.size());
         for(auto i = u32(0); i < length; i += 1) {
             s.dst[s.dst_pos] = s.dst[s.dst_pos - distance];
             s.dst_pos += 1;
@@ -234,12 +234,12 @@ auto inflate_dynamic(State& s) -> bool {
 auto inflate_stored(State& s) -> bool {
     s.r.bitbuf = 0;
     s.r.bitcnt = 0;
-    if(s.r.pos + 4 > s.r.src.size) {
+    if(s.r.pos + 4 > s.r.src.size()) {
         return false;
     }
     const auto len = u32(s.r.src[s.r.pos]) | u32(s.r.src[s.r.pos + 1]) << 8;
     s.r.pos += 4; // skip LEN + its one's-complement NLEN
-    if(s.r.pos + len > s.r.src.size || s.dst_pos + len > s.dst.size) {
+    if(s.r.pos + len > s.r.src.size() || s.dst_pos + len > s.dst.size()) {
         return false;
     }
     for(auto i = u32(0); i < len; i += 1) {
@@ -255,7 +255,7 @@ auto inflate(const noxx::Span<const u8> src, const noxx::Span<u8> dst) -> bool {
     constexpr auto error_value = false;
 
     auto s = State{
-        BitReader{src.data, src.size, 0, 0, 0},
+        BitReader{src.data, src.size(), 0, 0, 0},
         dst,
         0,
     };
@@ -279,5 +279,5 @@ auto inflate(const noxx::Span<const u8> src, const noxx::Span<u8> dst) -> bool {
             break;
         }
     }
-    return s.dst_pos == dst.size;
+    return s.dst_pos == dst.size();
 }

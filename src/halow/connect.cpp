@@ -5,6 +5,9 @@
 #include <hal/time.hpp>
 #include <noxx/array.hpp>
 #include <noxx/bits.hpp>
+#include <noxx/buf-reader.hpp>
+#include <noxx/buf-writer.hpp>
+#include <noxx/endian.hpp>
 
 #include "command.hpp"
 #include "connect.hpp"
@@ -39,8 +42,8 @@ constexpr auto keepalive_interval_us = u64(30'000'000); // idle time before a ke
 constexpr auto rx_error_limit        = u32(8);          // consecutive rx stream errors treated as a desync
 constexpr auto rx_queue_max          = u32(6);          // decoded frames buffered for link_rx_pop
 
-auto desynced      = false;             // rx stream wedged, chip reboot required
-auto last_activity = u64(0);            // last rx/tx time, drives the keepalive timer
+auto desynced      = false;              // rx stream wedged, chip reboot required
+auto last_activity = u64(0);             // last rx/tx time, drives the keepalive timer
 auto link_handle   = coop::TaskHandle(); // link_task's handle, cancelled by disconnect
 
 auto rx_queue_head = (net::Packet*)(nullptr);
@@ -83,9 +86,9 @@ auto tx_mgmt(const noxx::Span<const u8> frame) -> coop::Async<bool> {
 
     const auto packet = net::AutoPacket(net::packet_alloc(tx_headroom));
     co_ensure(packet.get() != nullptr);
-    const auto body = packet->append(frame.size);
+    const auto body = packet->append(frame.size());
     co_ensure(body != nullptr, "mgmt frame too long");
-    noxx::memcpy(body, frame.data, frame.size);
+    noxx::memcpy(body, frame.data, frame.size());
 
     pkt_id += 1;
     const auto info = SkbHeader::TxInfo{
@@ -123,7 +126,7 @@ auto wait_mgmt(const u16 frame_control, const u64 timeout_us) -> coop::Async<nox
             log_tx_status(*rx, skbh);
             continue;
         }
-        auto r = BufReader{packet_frame(*rx, skbh), skbh.len};
+        auto r = noxx::BufReader{packet_frame(*rx, skbh), skbh.len};
         co_unwrap(header, r.read<dot11::Header>());
         if((header.frame_control & dot11::Fc::VerTypeSubMask) != frame_control) {
             log<"halow: connect skipping frame fc 0x{04x}\n">(header.frame_control);
@@ -145,7 +148,7 @@ auto set_sta_state(const u16 state, const u16 aid) -> coop::Async<bool> {
         .aid      = aid,
         .state    = state,
     };
-    co_return bool(co_await send_command(CommandId::SetStaState, as_span(req), {nullptr, 0}, link.vif));
+    co_return bool(co_await send_command(CommandId::SetStaState, as_span(req), {}, link.vif));
 }
 
 // SET_CHANNEL + SET_TXPOWER from the ap's s1g operation ie
@@ -189,10 +192,10 @@ auto configure_channel(const dot11::S1gOp& s1g_op) -> coop::Async<bool> {
         .pri_1mhz_chan_idx = u8(pri_idx),
         .dot11_mode        = Dot11ProtoMode::Ah,
     };
-    co_ensure(co_await send_command(CommandId::SetChannel, as_span(req), {nullptr, 0}));
+    co_ensure(co_await send_command(CommandId::SetChannel, as_span(req), {}));
 
     const auto pwr_req = SetTxPowerReq{.power_qdbm = i32(op_chan->max_tx_eirp_dbm) * qdbm_per_dbm};
-    co_ensure(co_await send_command(CommandId::SetTxPower, as_span(pwr_req), {nullptr, 0}));
+    co_ensure(co_await send_command(CommandId::SetTxPower, as_span(pwr_req), {}));
 
     link.freq_khz = op_chan->freq_khz;
     prim_bw_mhz   = pri_bw;
@@ -225,7 +228,7 @@ auto configure_qos() -> coop::Async<bool> {
             .contention_window_max = defaults[aci].cw_max,
             .max_txop_usec         = txop_max_us,
         };
-        co_ensure(co_await send_command(CommandId::SetQosParams, as_span(req), {nullptr, 0}));
+        co_ensure(co_await send_command(CommandId::SetQosParams, as_span(req), {}));
     }
     co_return true;
 }
@@ -250,7 +253,7 @@ auto authenticate() -> coop::Async<bool> {
         }
 
         co_unwrap(skbh, parse_skb_header(**rx_o));
-        auto r = BufReader{packet_frame(**rx_o, skbh), skbh.len};
+        auto r = noxx::BufReader{packet_frame(**rx_o, skbh), skbh.len};
         co_unwrap(auth, r.read<dot11::Auth>(), "short auth response");
         co_ensure(auth.alg == dot11::AuthAlg::Open && auth.seq == 2, "unexpected auth response");
         co_ensure(auth.status_code == dot11::status_success, "authentication refused");
@@ -264,33 +267,33 @@ auto associate(const noxx::StringView ssid) -> coop::Async<bool> {
 
     // ref frame_association_request_build
     auto frame = noxx::Array<u8, 128>();
-    auto w     = BufWriter{{frame.data, frame.size()}};
-    co_unwrap(req, w.append<dot11::AssocReq>());
+    auto w     = noxx::BufWriter::from_span(frame);
+    co_unwrap(req, w.alloc_obj<dot11::AssocReq>());
     req = {
         .header          = make_mgmt_header(dot11::Fc::AssocReq, link.bssid, link.mac, link.bssid),
         .capability      = assoc_capability,
         .listen_interval = 0,
     };
-    co_unwrap(ssid_ie, w.append<dot11::IeHeader>());
+    co_unwrap(ssid_ie, w.alloc_obj<dot11::IeHeader>());
     ssid_ie = {dot11::Ie::Ssid, u8(ssid.size())};
-    co_ensure(w.append(ssid.data(), ssid.size()) != nullptr);
-    co_unwrap(aid_ie, w.append<dot11::IeHeader>());
+    co_ensure(w.append_span({(const u8*)ssid.data(), ssid.size()}));
+    co_unwrap(aid_ie, w.alloc_obj<dot11::IeHeader>());
     aid_ie = {dot11::Ie::AidRequest, 1};
-    co_unwrap(aid_mode, w.append(1));
+    co_unwrap(aid_mode, w.alloc_obj<u8>());
     aid_mode = 0;
     // s1g capabilities ie, must match the one sent in probe requests
-    co_unwrap(caps, w.append<dot11::S1gCaps>());
+    co_unwrap(caps, w.alloc_obj<dot11::S1gCaps>());
     caps = make_s1g_capabilities();
     // wmm information element (ref ie_wmm_info_build)
-    constexpr u8 wmm_info[] = {0x00, 0x50, 0xf2, 0x02, 0x00, 0x01, 0x00};
-    co_unwrap(wmm_ie, w.append<dot11::IeHeader>());
+    constexpr auto wmm_info = noxx::to_array<u8>({0x00, 0x50, 0xf2, 0x02, 0x00, 0x01, 0x00});
+    co_unwrap(wmm_ie, w.alloc_obj<dot11::IeHeader>());
     wmm_ie = {dot11::Ie::VendorSpecific, sizeof(wmm_info)};
-    co_ensure(w.append(wmm_info, sizeof(wmm_info)) != nullptr);
+    co_ensure(w.append_obj(wmm_info));
 
-    co_ensure(co_await tx_mgmt(w.written()));
+    co_ensure(co_await tx_mgmt({frame.data, w.data - frame.data}));
     co_unwrap(rx, co_await wait_mgmt(dot11::Fc::AssocResp, response_wait_us), "no association response");
     co_unwrap(skbh, parse_skb_header(*rx));
-    auto r = BufReader{packet_frame(*rx, skbh), skbh.len};
+    auto r = noxx::BufReader{packet_frame(*rx, skbh), skbh.len};
     co_unwrap(resp, r.read<dot11::AssocResp>(), "short assoc response");
     co_ensure(resp.status_code == dot11::status_success, "association refused");
 
@@ -392,7 +395,7 @@ auto connect(const dot11::MacAddr& mac, const noxx::StringView ssid) -> coop::As
         .interface_type = InterfaceType::Sta,
     };
     auto vif = vif_invalid;
-    co_ensure(co_await send_command(CommandId::AddInterface, as_span(if_req), {nullptr, 0}, vif_invalid, &vif));
+    co_ensure(co_await send_command(CommandId::AddInterface, as_span(if_req), {}, vif_invalid, &vif));
     co_ensure(vif != vif_invalid);
     link.vif = vif;
 
@@ -405,7 +408,7 @@ auto connect(const dot11::MacAddr& mac, const noxx::StringView ssid) -> coop::As
             .dtim_period        = 0,
             .cssid              = 0,
         };
-        ok = bool(co_await send_command(CommandId::BssConfig, as_span(req), {nullptr, 0}, link.vif));
+        ok = bool(co_await send_command(CommandId::BssConfig, as_span(req), {}, link.vif));
     }
 
     // keep the radio awake: chip power save would doze between beacons,
@@ -415,7 +418,7 @@ auto connect(const dot11::MacAddr& mac, const noxx::StringView ssid) -> coop::As
             .enabled            = 0,
             .dynamic_ps_offload = 0,
         };
-        ok = bool(co_await send_command(CommandId::ConfigPs, as_span(ps_req), {nullptr, 0}, link.vif));
+        ok = bool(co_await send_command(CommandId::ConfigPs, as_span(ps_req), {}, link.vif));
     }
 
     ok = ok && co_await configure_qos();
@@ -426,7 +429,7 @@ auto connect(const dot11::MacAddr& mac, const noxx::StringView ssid) -> coop::As
 
     if(!ok) {
         log<"halow: connect failed, removing interface\n">();
-        co_await send_command(CommandId::RemoveInterface, {nullptr, 0}, {nullptr, 0}, link.vif);
+        co_await send_command(CommandId::RemoveInterface, {}, {}, link.vif);
         link = LinkStatus();
         co_return false;
     }
@@ -460,7 +463,7 @@ auto disconnect() -> coop::Async<bool> {
     co_await tx_mgmt(as_span(deauth));
 
     co_await set_sta_state(StaState::None, 0);
-    co_await send_command(CommandId::RemoveInterface, {nullptr, 0}, {nullptr, 0}, link.vif);
+    co_await send_command(CommandId::RemoveInterface, {}, {}, link.vif);
     link = LinkStatus();
     co_return true;
 }
@@ -560,7 +563,7 @@ auto link_task() -> coop::Async<bool> {
     // reached only on an involuntary loss — an explicit disconnect cancels the
     // task before it gets here. remove the chip interface so a later connect
     // starts clean, and reset the link state
-    co_await send_command(CommandId::RemoveInterface, {nullptr, 0}, {nullptr, 0}, link.vif);
+    co_await send_command(CommandId::RemoveInterface, {}, {}, link.vif);
     link = LinkStatus();
     co_return true;
 }
@@ -580,19 +583,18 @@ auto eth_tx(const dot11::MacAddr& dst, const u16 ethertype, const noxx::Span<con
     // (ref umac_datapath_construct_80211_data_header_sta)
     const auto hdr = packet->append(sizeof(dot11::QosData) + dot11::llc_snap_len);
     co_ensure(hdr != nullptr);
-    auto w = BufWriter{{hdr, sizeof(dot11::QosData) + dot11::llc_snap_len}};
-    co_unwrap(qos, w.append<dot11::QosData>());
+    auto w = noxx::BufWriter{hdr, sizeof(dot11::QosData) + dot11::llc_snap_len};
+    co_unwrap(qos, w.alloc_obj<dot11::QosData>());
     qos = {
         .header      = make_mgmt_header(dot11::Fc::QosData | dot11::Fc::ToDs, link.bssid, link.mac, dst),
         .qos_control = 0, // tid 0
     };
-    co_ensure(w.append(dot11::llc_snap, sizeof(dot11::llc_snap)) != nullptr);
-    const u8 ethertype_be[] = {u8(ethertype >> 8), u8(ethertype)}; // big-endian on the wire
-    co_ensure(w.append(ethertype_be, sizeof(ethertype_be)) != nullptr);
+    co_ensure(w.append_obj(dot11::llc_snap));
+    co_ensure(w.append_obj(noxx::byteswap(ethertype)));
 
-    const auto body = packet->append(payload.size);
+    const auto body = packet->append(payload.size());
     co_ensure(body != nullptr, "payload too long");
-    noxx::memcpy(body, payload.data, payload.size);
+    noxx::memcpy(body, payload.data, payload.size());
 
     // multicast frames are not acked, they ride the no-ack data channel
     // (ref mmdrv_tx_frame)

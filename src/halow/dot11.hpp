@@ -218,6 +218,6 @@ struct S1gOp {
 static_assert(sizeof(S1gOp) == 8);
 
 // llc/snap header for 802.11 data payloads (rfc 1042)
-constexpr u8   llc_snap[]   = {0xaa, 0xaa, 0x03, 0x00, 0x00, 0x00};
+constexpr auto llc_snap     = noxx::to_array<u8>({0xaa, 0xaa, 0x03, 0x00, 0x00, 0x00});
 constexpr auto llc_snap_len = usize(8); // 6 byte header + 2 byte ethertype
 } // namespace halow::dot11

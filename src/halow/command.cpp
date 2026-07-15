@@ -1,6 +1,7 @@
 #include <coop/promise.hpp>
 #include <coop/timer.hpp>
 #include <hal/time.hpp>
+#include <noxx/algorithm.hpp>
 #include <noxx/array.hpp>
 #include <noxx/defer.hpp>
 #include <noxx/format.hpp>
@@ -75,12 +76,12 @@ auto send_command(const u16 id, const noxx::Span<const u8> req, const noxx::Span
     header = CommandHeader{
         .flags      = CommandFlag::Req,
         .message_id = id,
-        .len        = u16(req.size),
+        .len        = u16(req.size()),
         .host_id    = host_id,
         .vif_id     = vif,
     };
-    co_unwrap(payload, packet->append(req.size));
-    noxx::memcpy(&payload, req.data, req.size);
+    co_unwrap(payload, packet->append(req.size()));
+    noxx::memcpy(&payload, req.data, req.size());
     co_ensure(co_await yaps_tx(SkbChan::Command, *packet));
 
     // await the matching response, backlogging unrelated frames meanwhile
@@ -110,8 +111,7 @@ auto send_command(const u16 id, const noxx::Span<const u8> req, const noxx::Span
         if(resp_vif != nullptr) {
             *resp_vif = rcmd->vif_id;
         }
-        const auto data_len = usize(rcmd->len - sizeof(rresp->status));
-        const auto copy_len = data_len < resp.size ? data_len : resp.size;
+        const auto copy_len = noxx::min(rcmd->len - sizeof(rresp->status), resp.size());
         noxx::memcpy(resp.data, rresp->data, copy_len);
         co_return usize(copy_len);
     }

@@ -7,7 +7,6 @@
 #include "../hw/nvic.hpp"
 #include "../hw/rcc.hpp"
 #include "../hw/usart.hpp"
-#include "../system.hpp"
 #include "time.hpp"
 #include "uart.hpp"
 
@@ -78,7 +77,7 @@ auto lpuart1_handler() -> void {
 
 auto read(const noxx::Span<u8> buf) -> usize {
     auto n = usize(0);
-    while(rx_head != rx_tail && n < buf.size) {
+    while(rx_head != rx_tail && n < buf.size()) {
         __disable_irq();
         buf[n]  = rx_buf[rx_tail];
         rx_tail = (rx_tail + 1) % rx_buf_size;
@@ -90,7 +89,7 @@ auto read(const noxx::Span<u8> buf) -> usize {
 
 auto write(const noxx::Span<const u8> buf) -> usize {
     auto n = usize(0);
-    while((LPUART1_REGS.status & hw::usart::Status::TXEmpty) && n < buf.size) {
+    while((LPUART1_REGS.status & hw::usart::Status::TXEmpty) && n < buf.size()) {
         LPUART1_REGS.transmit_data = buf[n];
         n += 1;
     }

@@ -14,6 +14,7 @@
 #define GPIOG_BASE      0x4202'1800 // gpio.hpp
 #define GPIOH_BASE      0x4202'1C00 // gpio.hpp
 #define GPIOI_BASE      0x4202'2000 // gpio.hpp
+#define RNG_BASE        0x420C'0800 // rng.hpp
 #define LPUART1_BASE    0x4600'2400 // usart.hpp
 #define PWR_BASE        0x4602'0800 // pwr.hpp
 #define RCC_BASE        0x4602'0C00 // rcc.hpp

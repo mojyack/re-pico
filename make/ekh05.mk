@@ -16,6 +16,7 @@ EKH05_OBJS := $(OUT)/ekh05/main.o \
 			  $(OUT)/ekh05/hal/time.o \
 			  $(OUT)/ekh05/hal/uart.o \
 			  $(OUT)/ekh05/hal/spi.o \
+			  $(OUT)/ekh05/hal/rng.o \
 			  $(OUT)/halow/halow.o \
 			  $(OUT)/halow/firmware.o \
 			  $(OUT)/halow/host-table.o \
@@ -24,7 +25,17 @@ EKH05_OBJS := $(OUT)/ekh05/main.o \
 			  $(OUT)/halow/scan.o \
 			  $(OUT)/halow/connect.o \
 			  $(OUT)/net/packet.o \
+			  $(OUT)/net/ip.o \
 			  $(OUT)/net/arp.o \
+			  $(OUT)/crypto/sha256.o \
+			  $(OUT)/crypto/hmac-sha256.o \
+			  $(OUT)/crypto/kdf.o \
+			  $(OUT)/crypto/aes.o \
+			  $(OUT)/crypto/aes-cmac.o \
+			  $(OUT)/crypto/aes-keywrap.o \
+			  $(OUT)/crypto/p256.o \
+			  $(OUT)/crypto/sae.o \
+			  $(OUT)/crypto/eapol.o \
 			  $(OUT)/halow-fw-blob.o \
 			  $(OUT)/halow-regdb.o \
 			  $(OUT)/coop/runner.o \

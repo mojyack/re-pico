@@ -3,6 +3,9 @@
 #include <coop/promise.hpp>
 #include <coop/task-handle.hpp>
 #include <coop/timer.hpp>
+#include <crypto/eapol.hpp>
+#include <crypto/sae.hpp>
+#include <hal/rng.hpp>
 #include <hal/uart.hpp>
 #include <halow/command.hpp>
 #include <halow/connect.hpp>
@@ -92,6 +95,70 @@ auto hexdump(const u8* const data, const usize size) -> coop::Async<bool> {
     co_return true;
 }
 
+struct HwRng : crypto::Rng {
+    auto operator()(noxx::Span<u8> out) -> bool override {
+        return rng::fill(out);
+    }
+};
+
+auto crypto_selftest() -> coop::Async<bool> {
+    constexpr auto error_value = false;
+
+    // hardware RNG sanity: two draws must differ
+    auto a = noxx::Array<u8, 8>();
+    auto b = noxx::Array<u8, 8>();
+    co_ensure(rng::fill(a) && rng::fill(b), "rng fill failed");
+    co_ensure(a != b, "rng returned repeated bytes");
+    co_ensure(co_await printf<"rng ok: {02x}{02x}{02x}{02x}...\n">(a[0], a[1], a[2], a[3]));
+
+    // SAE group-19 H2E handshake between a local STA and AP role
+    const auto ssid     = noxx::StringView("halow-test");
+    const auto password = noxx::StringView("password");
+    const auto pt       = crypto::sae::derive_pt({(const u8*)ssid.data(), ssid.size()}, {(const u8*)password.data(), password.size()});
+    const auto sta_mac  = crypto::MacAddr{0x0c, 0xbf, 0x74, 0x00, 0x00, 0x0a};
+    const auto ap_mac   = crypto::MacAddr{0x00, 0x60, 0xad, 0x80, 0x1f, 0x51};
+
+    auto hw  = HwRng();
+    auto sta = crypto::sae::Session();
+    auto ap  = crypto::sae::Session();
+    co_ensure(sta.start(pt, sta_mac, ap_mac, hw), "sta sae start failed");
+    co_ensure(ap.start(pt, ap_mac, sta_mac, hw), "ap sae start failed");
+
+    auto       sta_commit = noxx::Array<u8, 128>();
+    auto       ap_commit  = noxx::Array<u8, 128>();
+    const auto sc         = sta.write_commit(sta_commit);
+    const auto ac         = ap.write_commit(ap_commit);
+    co_ensure(sc != 0 && ac != 0, "sae write_commit failed");
+    co_ensure(sta.read_commit({ap_commit.data, ac}), "sta read_commit failed");
+    co_ensure(ap.read_commit({sta_commit.data, sc}), "ap read_commit failed");
+    co_ensure(sta.pmk == ap.pmk, "sae pmk mismatch");
+
+    auto       sta_confirm = noxx::Array<u8, 64>();
+    auto       ap_confirm  = noxx::Array<u8, 64>();
+    const auto scf         = sta.write_confirm(sta_confirm);
+    const auto acf         = ap.write_confirm(ap_confirm);
+    co_ensure(sta.verify_confirm({ap_confirm.data, acf}), "sta confirm verify failed");
+    co_ensure(ap.verify_confirm({sta_confirm.data, scf}), "ap confirm verify failed");
+    co_await print("sae ok: mutual pmk agreement + confirm verified\n");
+
+    // EAPOL PTK derivation known-answer (independent Python oracle vector)
+    constexpr auto kat_pmk = noxx::to_array<u8>({0xa4, 0x5d, 0xb8, 0xa0, 0xb3, 0x72, 0x5a, 0x6a, 0xc7, 0xe9, 0xfe, 0xde, 0xc3, 0x72, 0x1d, 0x1d,
+                                                 0x59, 0x49, 0x98, 0xa1, 0x16, 0x74, 0x43, 0xc3, 0x2d, 0x8c, 0xa3, 0xed, 0xb8, 0xf4, 0x57, 0x53});
+    auto           anonce  = crypto::eapol::Nonce();
+    auto           snonce  = crypto::eapol::Nonce();
+    for(auto i = usize(0); i < 32; i += 1) {
+        anonce[i] = 0x1a;
+        snonce[i] = 0x2b;
+    }
+    auto           ptk     = crypto::eapol::derive_ptk(kat_pmk, ap_mac, sta_mac, anonce, snonce);
+    constexpr auto kat_kck = noxx::to_array<u8>({0x76, 0x82, 0x1d, 0x26, 0x20, 0x03, 0x5e, 0xef, 0x71, 0xfa, 0x12, 0x49, 0x32, 0x39, 0x0a, 0x08});
+    co_ensure(ptk.kck == kat_kck, "eapol ptk kat mismatch");
+    co_await print("eapol ok: ptk derivation matches known-answer vector\n");
+
+    co_await print("crypto selftest PASS\n");
+    co_return true;
+}
+
 constexpr auto help = R"(commands:
   help              print this message
   reboot            reboot the board
@@ -110,6 +177,7 @@ constexpr auto help = R"(commands:
     halow keepalive    send a qos-null keepalive to the ap
     halow dump [sec]   dump received ethernet frames
     halow arp <ipv4>   broadcast an arp request over the link
+    halow saetest      run the WPA3 SAE/EAPOL crypto self-test
   mac               print halow mac address
   version           print dbgmcu versions
   ps                print process tree
@@ -257,6 +325,8 @@ auto handle_command(noxx::StringView line) -> coop::Async<bool> {
                 co_await hexdump(p, packet->len);
             }
             co_ensure(co_await printf<"dump done: {} ethernet frames\n">(shown));
+        } else if(elms[1] == "saetest") {
+            co_ensure(co_await crypto_selftest());
         } else if(elms[1] == "keepalive") {
             co_ensure(co_await halow::send_keepalive());
             co_await print("keepalive sent\n");
@@ -271,34 +341,20 @@ auto handle_command(noxx::StringView line) -> coop::Async<bool> {
             }
         } else if(elms[1] == "arp") {
             co_ensure(elms.size() >= 3, "usage: halow arp <target-ipv4> [sender-ipv4]");
-            auto parse_ip = [](noxx::StringView str, u8* out) -> bool {
-                constexpr auto error_value = false;
-                unwrap(parts, split(str, "."));
-                ensure(parts.size() == 4, "bad ipv4 address");
-                for(auto i = usize(0); i < 4; i += 1) {
-                    unwrap(v, noxx::from_chars<u8>(parts[i]));
-                    out[i] = v;
-                }
-                return true;
-            };
-            auto ip     = noxx::Array<u8, 4>();
-            auto sender = noxx::Array<u8, 4>();
-            for(auto i = usize(0); i < 4; i += 1) {
-                sender[i] = 0;
-            }
-            co_ensure(parse_ip(elms[2], ip.data));
+            co_unwrap(ip, net::parse_ip(elms[2]));
+            auto sender = net::IPv4Addr();
             if(elms.size() >= 4) {
-                co_ensure(parse_ip(elms[3], sender.data));
+                co_unwrap(ip, net::parse_ip(elms[3]));
+                sender = ip;
             }
             const auto& link = halow::link_status();
             co_ensure(link.up, "not connected");
-            auto arp = noxx::Array<u8, net::arp::packet_size>();
-            co_ensure(net::arp::build_request({arp.data, arp.size()}, link.mac.data, sender.data, ip.data));
-            constexpr auto broadcast = halow::dot11::MacAddr{0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+            auto arp = net::arp::build_request(link.mac, sender, ip);
             // "uni" sends the request unicast to the ap itself, which is acked
             // over the air and exercises the reliable data path
-            const auto& dst = (elms.size() >= 5 && elms[4] == "uni") ? halow::link_status().bssid : broadcast;
-            co_ensure(co_await halow::eth_tx(dst, net::arp::ethertype, {arp.data, arp.size()}));
+            constexpr auto broadcast = net::MacAddr{0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+            const auto&    dst       = (elms.size() >= 5 && elms[4] == "uni") ? halow::link_status().bssid : broadcast;
+            co_ensure(co_await halow::eth_tx(dst, net::arp::ethertype, {(const u8*)&arp, sizeof(arp)}));
             co_await print("arp request sent, use halow dump to see the reply\n");
         } else if(elms[1] == "stat") {
             auto status = halow::YapsStatus();
@@ -386,6 +442,7 @@ auto entry() -> void {
     init_system();
     uart::init(921600);
     time::start_systick();
+    rng::init();
     net::packet_pool_init();
 
     print_blocking("ready\n");

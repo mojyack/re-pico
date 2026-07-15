@@ -78,4 +78,21 @@ auto memcpy(void* dest, const void* src, usize size) -> void {
         ((u8*)dest)[i] = ((const u8*)src)[i];
     }
 }
+
+auto memset(void* dest, const u8 c, usize size) -> void {
+    for(auto i = usize(0); i < size; i += 1) {
+        ((u8*)dest)[i] = c;
+    }
+}
+
+auto memcmp(const void* a, const void* b, usize size) -> int {
+    for(auto i = usize(0); i < size; i += 1) {
+        const auto x = ((const u8*)a)[i];
+        const auto y = ((const u8*)b)[i];
+        if(x != y) {
+            return x < y ? -1 : 1;
+        }
+    }
+    return 0;
+}
 } // namespace noxx

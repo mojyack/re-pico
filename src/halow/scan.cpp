@@ -5,6 +5,8 @@
 #include <halow-regdb.hpp>
 #include <noxx/algorithm.hpp>
 #include <noxx/array.hpp>
+#include <noxx/buf-reader.hpp>
+#include <noxx/buf-writer.hpp>
 
 #include "command.hpp"
 #include "dot11.hpp"
@@ -90,11 +92,11 @@ auto pack_channel(const S1gChannel& channel, const u32 pwr_idx) -> u32 {
 
 // probe request frame: pv0 mgmt header + ssid ie + s1g capabilities ie
 // (ref umac/frames/probe_request.c)
-auto build_probe_request(BufWriter& w, const dot11::MacAddr& mac, const noxx::StringView ssid) -> bool {
+auto build_probe_request(noxx::BufWriter& w, const dot11::MacAddr& mac, const noxx::StringView ssid) -> bool {
     constexpr auto error_value = false;
 
     // mgmt header, da/bssid broadcast
-    unwrap(header, w.append<dot11::Header>());
+    unwrap(header, w.alloc_obj<dot11::Header>());
     header = {
         .frame_control = dot11::Fc::ProbeReq,
         .addr1         = broadcast_mac,
@@ -103,50 +105,51 @@ auto build_probe_request(BufWriter& w, const dot11::MacAddr& mac, const noxx::St
     };
 
     // ssid ie, empty = wildcard
-    unwrap(ssid_ie, w.append<dot11::IeHeader>());
+    unwrap(ssid_ie, w.alloc_obj<dot11::IeHeader>());
     ssid_ie = {dot11::Ie::Ssid, u8(ssid.size())};
-    ensure(w.append(ssid.data(), ssid.size()) != nullptr);
+    ensure(w.append_span({(const u8*)ssid.data(), ssid.size()}));
 
-    unwrap(caps, w.append<dot11::S1gCaps>());
+    unwrap(caps, w.alloc_obj<dot11::S1gCaps>());
     caps = make_s1g_capabilities();
     return true;
 }
 
 // hw scan request payload: flags, dwell, then chan list / power list / probe request tlvs
-auto build_hw_scan_req(BufWriter& w, const Regdom& regdom, const dot11::MacAddr& mac, const noxx::StringView ssid) -> bool {
+auto build_hw_scan_req(noxx::BufWriter& w, const Regdom& regdom, const dot11::MacAddr& mac, const noxx::StringView ssid) -> bool {
     constexpr auto error_value = false;
 
-    unwrap(req, w.append<HwScanReq>());
+    unwrap(req, w.alloc_obj<HwScanReq>());
     req = {
         .flags         = HwScanFlag::Start,
         .dwell_time_ms = dwell_time_ms,
     };
 
     auto powers = PowerList();
-    unwrap(chan_tlv, w.append<HwScanTlvHeader>());
+    unwrap(chan_tlv, w.alloc_obj<HwScanTlvHeader>());
     chan_tlv = {.tag = HwScanTlvTag::ChanList};
     for(auto i = u32(0); i < regdom.num_channels; i += 1) {
         const auto& channel = regdom.channels[i];
         if(channel_scannable(channel)) {
             const auto word = pack_channel(channel, powers.index_of(channel.max_tx_eirp_dbm));
-            ensure(w.append(&word, sizeof(word)) != nullptr);
+            ensure(w.append_obj(word));
             chan_tlv.len += sizeof(word);
         }
     }
 
-    unwrap(power_tlv, w.append<HwScanTlvHeader>());
+    unwrap(power_tlv, w.alloc_obj<HwScanTlvHeader>());
     power_tlv = {.tag = HwScanTlvTag::PowerList};
     for(auto i = u32(0); i < powers.count; i += 1) {
         const auto qdbm = u32(i32(powers.eirp_dbm[i]) * qdbm_per_dbm);
-        ensure(w.append(&qdbm, sizeof(qdbm)) != nullptr);
+        ensure(w.append_obj(qdbm));
         power_tlv.len += sizeof(qdbm);
     }
 
-    unwrap(probe_tlv, w.append<HwScanTlvHeader>());
-    probe_tlv              = {.tag = HwScanTlvTag::ProbeReq};
-    const auto probe_start = w.offset;
+    unwrap(probe_tlv, w.alloc_obj<HwScanTlvHeader>());
+    probe_tlv = {.tag = HwScanTlvTag::ProbeReq};
+
+    const auto data_before = w.data;
     ensure(build_probe_request(w, mac, ssid));
-    probe_tlv.len = u16(w.offset - probe_start);
+    probe_tlv.len = u16(w.data - data_before);
     return true;
 }
 
@@ -160,7 +163,7 @@ auto process_mgmt_frame(const net::Packet& packet, const noxx::Span<ScanResult> 
     if(skbh.channel != SkbChan::Data && skbh.channel != SkbChan::Mgmt && skbh.channel != SkbChan::Beacon) {
         return count;
     }
-    auto r = BufReader{packet_frame(packet, skbh), skbh.len};
+    auto r = noxx::BufReader{packet_frame(packet, skbh), skbh.len};
     if(skbh.rx_status.flags & RxFlag::FcsIncluded) {
         ensure(r.size >= dot11::fcs_len);
         r.size -= dot11::fcs_len;
@@ -174,7 +177,7 @@ auto process_mgmt_frame(const net::Packet& packet, const noxx::Span<ScanResult> 
             return count; // duplicate
         }
     }
-    if(count >= results.size) {
+    if(count >= results.size()) {
         return count;
     }
 
@@ -247,7 +250,7 @@ auto scan(const dot11::MacAddr& mac, const noxx::StringView ssid, const noxx::Sp
         .interface_type = InterfaceType::Sta,
     };
     auto vif = vif_invalid;
-    co_ensure(co_await send_command(CommandId::AddInterface, as_span(if_req), {nullptr, 0}, vif_invalid, &vif));
+    co_ensure(co_await send_command(CommandId::AddInterface, as_span(if_req), {}, vif_invalid, &vif));
     co_ensure(vif != vif_invalid, "no vif in add interface response");
     log<"halow: scan vif {} regdom {}\n">(vif, noxx::StringView(regdom->country, 2));
 
@@ -255,9 +258,9 @@ auto scan(const dot11::MacAddr& mac, const noxx::StringView ssid, const noxx::Sp
     }
 
     auto req = noxx::Array<u8, hw_scan_req_max>();
-    auto w   = BufWriter{{req.data, req.size()}};
+    auto w   = noxx::BufWriter::from_span(req);
     co_ensure(build_hw_scan_req(w, *regdom, mac, ssid), "hw scan request too long");
-    const auto started = co_await send_command(CommandId::HwScan, w.written(), {nullptr, 0}, vif);
+    const auto started = co_await send_command(CommandId::HwScan, noxx::Span<const u8>{req.data, w.data - req.data}, {}, vif);
 
     // collect probe responses until the scan done event
     auto count = usize(0);
@@ -284,11 +287,11 @@ auto scan(const dot11::MacAddr& mac, const noxx::StringView ssid, const noxx::Sp
         if(!done) {
             log<"halow: scan timeout, aborting\n">();
             const auto abort_req = HwScanReq{.flags = HwScanFlag::Abort};
-            co_await send_command(CommandId::HwScan, as_span(abort_req), {nullptr, 0}, vif);
+            co_await send_command(CommandId::HwScan, as_span(abort_req), {}, vif);
         }
     }
 
-    co_await send_command(CommandId::RemoveInterface, {nullptr, 0}, {nullptr, 0}, vif);
+    co_await send_command(CommandId::RemoveInterface, {}, {}, vif);
     co_ensure(started && done, "scan failed");
     co_return count;
 }
