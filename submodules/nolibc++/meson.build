@@ -1,14 +1,15 @@
 project('nolibc++', 'cpp', version: '1.0.0', default_options : ['warning_level=3', 'werror=false', 'cpp_std=c++23'])
 add_project_arguments('-DNOXX_TEST', language: 'cpp')
 
-executable('malloc-test',
+exe = executable('malloc-test',
   files(
     'src/malloc.cpp',
     'tests/malloc.cpp',
   )
 )
+test('malloc', exe)
 
-executable('string-test',
+exe = executable('string-test',
   files(
     'src/malloc.cpp',
     'src/string-view.cpp',
@@ -17,23 +18,26 @@ executable('string-test',
     'tests/string.cpp',
   )
 )
+test('string', exe)
 
-executable('vector-test',
+exe = executable('vector-test',
   files(
     'src/malloc.cpp',
     'tests/noxx-support.cpp',
     'tests/vector.cpp',
   )
 )
+test('vector', exe)
 
-executable('variant-test',
+exe = executable('variant-test',
   files(
     'tests/noxx-support.cpp',
     'tests/variant.cpp',
   )
 )
+test('variant', exe)
 
-executable('format-test',
+exe = executable('format-test',
   files(
     'src/malloc.cpp',
     'src/string-view.cpp',
@@ -42,8 +46,9 @@ executable('format-test',
     'tests/noxx-support.cpp',
   )
 )
+test('format', exe)
 
-executable('charconv-test',
+exe = executable('charconv-test',
   files(
     'src/malloc.cpp',
     'src/string-view.cpp',
@@ -52,11 +57,13 @@ executable('charconv-test',
     'tests/noxx-support.cpp',
   )
 )
+test('charconv', exe)
 
-executable('unique-ptr-test',
+exe = executable('unique-ptr-test',
   files(
     'src/malloc.cpp',
     'tests/noxx-support.cpp',
     'tests/unique-ptr.cpp',
   )
 )
+test('unique-ptr', exe)
