@@ -17,6 +17,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include <net/icmp.hpp>
 #include <net/stack.hpp>
 
 #include <noxx/assert.hpp>
@@ -57,7 +58,7 @@ struct TapNetIf {
         fd = open("/dev/net/tun", O_RDWR);
         ensure(fd >= 0, "cannot open /dev/net/tun");
 
-        auto ifr = ifreq();
+        auto ifr      = ifreq();
         ifr.ifr_flags = IFF_TAP | IFF_NO_PI;
         strncpy(ifr.ifr_name, name, IFNAMSIZ - 1);
         ensure(ioctl(fd, TUNSETIFF, &ifr) >= 0, "TUNSETIFF failed (is the tap created?)");
@@ -84,10 +85,19 @@ struct TapNetIf {
 };
 } // namespace
 
+// outbound ping state: send times keyed by low sequence byte
+auto ping_sent_at = noxx::Array<u64, 256>();
+
+auto on_echo_reply(net::Stack& /*self*/, const net::IPv4Addr src, const u16 id, const u16 seq, const noxx::Span<const u8> data) -> void {
+    const auto rtt = now_ms() - ping_sent_at[seq & 0xff];
+    printf("ping reply from %u.%u.%u.%u: id=%u seq=%u %zu bytes rtt=%llu ms\n",
+           src[0], src[1], src[2], src[3], id, seq, data.size(), (unsigned long long)rtt);
+}
+
 auto main(const int argc, const char* const argv[]) -> int {
     constexpr auto error_value = 1;
 
-    ensure(argc >= 2, "usage: tap-host TAPDEV [IPADDR]");
+    ensure(argc >= 2, "usage: tap-host TAPDEV [IPADDR [PINGTARGET]]");
 
     net::packet_pool_init();
 
@@ -98,16 +108,30 @@ auto main(const int argc, const char* const argv[]) -> int {
     stack.init(tap.netif);
     if(argc >= 3) {
         unwrap(addr, net::parse_ip(argv[2]));
-        stack.addr = addr;
+        stack.addr    = addr;
+        stack.netmask = {255, 255, 255, 0};
     }
+
+    // optional outbound ping target: send one echo request per second
+    auto ping_target = net::IPv4Addr();
+    auto pinging     = false;
+    if(argc >= 4) {
+        unwrap(target, net::parse_ip(argv[3]));
+        ping_target              = target;
+        pinging                  = true;
+        stack.on_icmp_echo_reply = on_echo_reply;
+    }
+    auto       ping_seq  = u16(0);
+    auto       next_ping = now_ms();
+    const auto ping_id   = u16(0xbeef);
 
     printf("tap-host: bridging %s, waiting for frames\n", argv[1]);
     while(true) {
         auto fds = fd_set();
         FD_ZERO(&fds);
         FD_SET(tap.fd, &fds);
-        auto timeout = timeval{.tv_sec = 0, .tv_usec = 100 * 1000};
-        const auto r = select(tap.fd + 1, &fds, nullptr, nullptr, &timeout);
+        auto       timeout = timeval{.tv_sec = 0, .tv_usec = 100 * 1000};
+        const auto r       = select(tap.fd + 1, &fds, nullptr, nullptr, &timeout);
         ensure(r >= 0, "select failed");
         if(r > 0) {
             auto packet = net::AutoPacket(tap.rx_pop());
@@ -119,6 +143,15 @@ auto main(const int argc, const char* const argv[]) -> int {
         }
         while(stack.dispatch()) {
         }
-        stack.tick(now_ms());
+        const auto now = now_ms();
+        stack.tick(now);
+        if(pinging && now >= next_ping) {
+            next_ping                     = now + 1000;
+            ping_sent_at[ping_seq & 0xff] = now;
+            if(!net::icmp::send_echo(stack, ping_target, ping_id, ping_seq, 32)) {
+                printf("ping: send failed (packet pool?)\n");
+            }
+            ping_seq += 1;
+        }
     }
 }

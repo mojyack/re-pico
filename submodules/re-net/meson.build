@@ -15,6 +15,7 @@ inc = include_directories('src')
 
 net_files = files(
     'src/net/arp.cpp',
+    'src/net/icmp.cpp',
     'src/net/ip.cpp',
     'src/net/packet.cpp',
     'src/net/stack.cpp',
@@ -36,6 +37,7 @@ support_files = files('tests/noxx-support.cpp')
 
 foreach name : [
     'packet',
+    'net',
 ]
     exe = executable(
         name + '-test',

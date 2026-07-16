@@ -1,6 +1,8 @@
 #include <noxx/endian.hpp>
 
+#include "arp.hpp"
 #include "ethernet.hpp"
+#include "ip.hpp"
 #include "stack.hpp"
 
 #include <noxx/assert.hpp>
@@ -39,8 +41,9 @@ auto Stack::dispatch() -> bool {
     return true;
 }
 
-auto Stack::tick(const u64 /*now_ms*/) -> void {
-    // no protocol timers yet (arp aging arrives with n1)
+auto Stack::tick(const u64 now_ms) -> void {
+    this->now_ms = now_ms;
+    arp::tick(*this, now_ms);
 }
 
 auto Stack::send(AutoPacket packet) -> bool {
@@ -50,17 +53,44 @@ auto Stack::send(AutoPacket packet) -> bool {
     return netif->tx(*netif, noxx::move(packet));
 }
 
+auto Stack::eth_send(const MacAddrRef dst, const u16 ethertype, AutoPacket packet) -> bool {
+    constexpr auto error_value = false;
+
+    ensure(netif != nullptr);
+    const auto raw = packet->prepend(sizeof(EthernetHeader));
+    ensure(raw != nullptr, "no headroom for ethernet header");
+    auto& header = *(EthernetHeader*)raw;
+    noxx::memcpy(header.dst.data, dst.data, MacAddr::size());
+    noxx::memcpy(header.src.data, netif->mac.data, MacAddr::size());
+    header.ethertype = noxx::byteswap(ethertype);
+    return send(noxx::move(packet));
+}
+
+auto Stack::on_link(const IPv4Addr ip) const -> bool {
+    for(auto i = usize(0); i < IPv4Addr::size(); i += 1) {
+        if((ip[i] & netmask[i]) != (addr[i] & netmask[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
 auto Stack::process(AutoPacket packet) -> void {
     if(packet->len < sizeof(EthernetHeader)) {
         return;
     }
-    const auto& header = *(const EthernetHeader*)packet->data();
+    const auto header = *(const EthernetHeader*)packet->data();
+    const auto src    = header.src;
+    packet->consume(sizeof(EthernetHeader));
     switch(noxx::byteswap(header.ethertype)) {
     case EtherType::Arp:
-    case EtherType::IPv4:
-    default:
-        // n1 demuxes these; n0 drops everything
+        arp::input(*this, noxx::move(packet));
         break;
+    case EtherType::IPv4:
+        ipv4::input(*this, src, noxx::move(packet));
+        break;
+    default:
+        break; // drop everything else
     }
 }
 } // namespace net

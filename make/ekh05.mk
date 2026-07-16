@@ -27,6 +27,8 @@ EKH05_OBJS := $(OUT)/ekh05/main.o \
 			  $(OUT)/net/packet.o \
 			  $(OUT)/net/ip.o \
 			  $(OUT)/net/arp.o \
+			  $(OUT)/net/icmp.o \
+			  $(OUT)/net/stack.o \
 			  $(OUT)/crypto/sha256.o \
 			  $(OUT)/crypto/hmac-sha256.o \
 			  $(OUT)/crypto/kdf.o \
@@ -34,8 +36,8 @@ EKH05_OBJS := $(OUT)/ekh05/main.o \
 			  $(OUT)/crypto/aes-cmac.o \
 			  $(OUT)/crypto/aes-keywrap.o \
 			  $(OUT)/crypto/p256.o \
-			  $(OUT)/crypto/sae.o \
-			  $(OUT)/crypto/eapol.o \
+			  $(OUT)/connect/sae.o \
+			  $(OUT)/connect/eapol.o \
 			  $(OUT)/halow-fw-blob.o \
 			  $(OUT)/halow-regdb.o \
 			  $(OUT)/coop/runner.o \

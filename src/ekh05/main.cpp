@@ -1,10 +1,10 @@
+#include <connect/eapol.hpp>
+#include <connect/sae.hpp>
 #include <console.hpp>
 #include <coop/io.hpp>
 #include <coop/promise.hpp>
 #include <coop/task-handle.hpp>
 #include <coop/timer.hpp>
-#include <connect/eapol.hpp>
-#include <connect/sae.hpp>
 #include <hal/rng.hpp>
 #include <hal/uart.hpp>
 #include <halow/command.hpp>
@@ -15,6 +15,7 @@
 #include <halow/scan.hpp>
 #include <halow/yaps.hpp>
 #include <net/arp.hpp>
+#include <net/ethernet.hpp>
 #include <net/packet.hpp>
 #include <noxx/bits.hpp>
 #include <noxx/charconv.hpp>
@@ -356,7 +357,7 @@ auto handle_command(noxx::StringView line) -> coop::Async<bool> {
             // over the air and exercises the reliable data path
             constexpr auto broadcast = net::MacAddr{0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
             const auto&    dst       = (elms.size() >= 5 && elms[4] == "uni") ? halow::link_status().bssid : broadcast;
-            co_ensure(co_await halow::eth_tx(dst, net::arp::ethertype, {(const u8*)&arp, sizeof(arp)}));
+            co_ensure(co_await halow::eth_tx(dst, net::EtherType::Arp, {(const u8*)&arp, sizeof(arp)}));
             co_await print("arp request sent, use halow dump to see the reply\n");
         } else if(elms[1] == "stat") {
             auto status = halow::YapsStatus();

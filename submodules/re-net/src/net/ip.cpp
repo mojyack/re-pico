@@ -1,6 +1,10 @@
 #include <noxx/charconv.hpp>
+#include <noxx/endian.hpp>
 
+#include "arp.hpp"
+#include "icmp.hpp"
 #include "ip.hpp"
+#include "stack.hpp"
 
 #include <noxx/assert.hpp>
 
@@ -23,3 +27,90 @@ auto parse_ip(const noxx::StringView str) -> noxx::Optional<IPv4Addr> {
     return ret;
 }
 } // namespace net
+
+namespace net::ipv4 {
+namespace {
+constexpr auto default_ttl = u8(64);
+constexpr auto flag_df     = u16(0x4000);
+
+auto ident = u16(0); // monotonic ipv4 id counter
+} // namespace
+
+auto checksum(const noxx::Span<const u8> data) -> u16 {
+    auto sum = u32(0);
+    for(auto i = usize(0); i < data.size(); i += 2) {
+        const auto hi = u32(data[i]);
+        const auto lo = i + 1 < data.size() ? u32(data[i + 1]) : u32(0);
+        sum += (hi << 8) | lo;
+    }
+    while((sum >> 16) != 0) {
+        sum = (sum & 0xffff) + (sum >> 16);
+    }
+    return u16(~sum);
+}
+
+auto input(Stack& stack, const MacAddrRef src_mac, AutoPacket packet) -> void {
+    if(packet->len < sizeof(Header)) {
+        return;
+    }
+    const auto& header = *(const Header*)packet->data();
+    if((header.version_ihl >> 4) != 4) {
+        return;
+    }
+    const auto ihl = usize(header.version_ihl & 0x0f) * 4;
+    if(ihl < sizeof(Header) || packet->len < ihl) {
+        return;
+    }
+    if(checksum({packet->data(), ihl}) != 0) {
+        return; // corrupt header
+    }
+
+    // learn the l2/l3 mapping from any inbound frame
+    arp::cache(stack, header.src, src_mac);
+
+    // accept only frames addressed to us
+    if(!(header.dst == stack.addr)) {
+        return;
+    }
+
+    const auto total = usize(noxx::byteswap(header.total_len));
+    if(total < ihl || total > packet->len) {
+        return;
+    }
+    const auto src   = header.src;
+    const auto proto = header.proto;
+    packet->len      = u16(total);
+    packet->consume(ihl);
+
+    switch(proto) {
+    case Proto::Icmp:
+        icmp::input(stack, src, noxx::move(packet));
+        break;
+    default:
+        break; // udp/tcp arrive in later phases
+    }
+}
+
+auto output(Stack& stack, const IPv4Addr dst, const u8 proto, AutoPacket packet) -> bool {
+    constexpr auto error_value = false;
+
+    const auto payload = packet->len;
+    const auto raw     = packet->prepend(sizeof(Header));
+    ensure(raw != nullptr, "no headroom for ipv4 header");
+
+    auto& header       = *(Header*)raw;
+    header             = Header{};
+    header.version_ihl = 0x45;
+    header.total_len   = noxx::byteswap(u16(sizeof(Header) + payload));
+    header.id          = noxx::byteswap(ident++);
+    header.flags_frag  = noxx::byteswap(flag_df);
+    header.ttl         = default_ttl;
+    header.proto       = proto;
+    header.src         = stack.addr;
+    header.dst         = dst;
+    header.checksum    = noxx::byteswap(checksum({raw, sizeof(Header)}));
+
+    const auto next_hop = stack.on_link(dst) ? dst : stack.gateway;
+    return arp::resolve_and_send(stack, next_hop, noxx::move(packet));
+}
+} // namespace net::ipv4
