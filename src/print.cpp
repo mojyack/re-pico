@@ -7,7 +7,7 @@ auto print_blocking(noxx::StringView str) -> void {
         const auto nl  = str.find("\n");
         const auto run = nl < 0 ? str : str.substr(0, nl);
         if(run.size() != 0) {
-            uart::write_blocking({(const u8*)run.data(), run.size()});
+            uart::write_blocking(run);
         }
         if(nl < 0) {
             break;
@@ -22,7 +22,7 @@ auto print(noxx::StringView str) -> coop::Async<void> {
         const auto nl  = str.find("\n");
         const auto run = nl < 0 ? str : str.substr(0, nl);
         if(run.size() != 0) {
-            co_await uart::write_all({(const u8*)run.data(), run.size()});
+            co_await uart::write_all(run);
         }
         if(nl < 0) {
             break;

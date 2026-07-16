@@ -349,8 +349,7 @@ auto wait_sae_auth(const u16 seq_num, u16& status_code) -> coop::Async<noxx::Opt
 auto sae_authenticate(const noxx::StringView ssid, const noxx::StringView password) -> coop::Async<bool> {
     constexpr auto error_value = false;
 
-    const auto pt      = crypto::sae::derive_pt({(const u8*)ssid.data(), ssid.size()},
-                                                {(const u8*)password.data(), password.size()});
+    const auto pt      = crypto::sae::derive_pt(ssid, password);
     auto       session = crypto::sae::Session();
     co_ensure(session.start(pt, link.mac, link.bssid, hw_rng), "sae start failed");
 
@@ -503,7 +502,7 @@ auto associate(const noxx::StringView ssid, const bool secure) -> coop::Async<bo
         .id     = crypto::ie::Id::Ssid,
         .length = u8(ssid.size()),
     }));
-    co_ensure(w.append_span({(const u8*)ssid.data(), ssid.size()}));
+    co_ensure(w.append_span(ssid));
     co_ensure(w.append_obj(crypto::ie::Header{
         .id     = crypto::ie::Id::AidRequest,
         .length = 1,

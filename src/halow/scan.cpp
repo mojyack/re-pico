@@ -109,7 +109,7 @@ auto build_probe_request(noxx::BufWriter& w, const dot11::MacAddr& mac, const no
         .id     = crypto::ie::Id::Ssid,
         .length = u8(ssid.size()),
     }));
-    ensure(w.append_span({(const u8*)ssid.data(), ssid.size()}));
+    ensure(w.append_span(ssid));
     ensure(w.append_obj(make_s1g_capabilities()));
     return true;
 }

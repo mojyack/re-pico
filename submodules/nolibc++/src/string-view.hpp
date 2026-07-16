@@ -1,5 +1,5 @@
 #pragma once
-#include "int.hpp"
+#include "span.hpp"
 
 namespace noxx {
 struct String;
@@ -16,6 +16,8 @@ struct StringView {
 
     auto operator[](usize i) const -> char;
     auto operator==(StringView other) const -> bool;
+
+    operator Span<const u8>() const;
 
     StringView() = default;
     StringView(const char* str);

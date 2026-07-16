@@ -114,7 +114,7 @@ auto crypto_selftest() -> coop::Async<bool> {
     // SAE group-19 H2E handshake between a local STA and AP role
     const auto ssid     = noxx::StringView("halow-test");
     const auto password = noxx::StringView("password");
-    const auto pt       = crypto::sae::derive_pt({(const u8*)ssid.data(), ssid.size()}, {(const u8*)password.data(), password.size()});
+    const auto pt       = crypto::sae::derive_pt(ssid, password);
     const auto sta_mac  = crypto::MacAddr{0x0c, 0xbf, 0x74, 0x00, 0x00, 0x0a};
     const auto ap_mac   = crypto::MacAddr{0x00, 0x60, 0xad, 0x80, 0x1f, 0x51};
 

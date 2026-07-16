@@ -64,6 +64,10 @@ auto StringView::operator==(StringView other) const -> bool {
     return true;
 }
 
+StringView::operator Span<const u8>() const {
+    return {(const u8*)ptr, length};
+}
+
 StringView::StringView(const char* const str) {
     ptr    = str;
     length = strlen(str);
