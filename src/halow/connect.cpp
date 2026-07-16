@@ -7,6 +7,7 @@
 #include <crypto/rng.hpp>
 #include <hal/rng.hpp>
 #include <hal/time.hpp>
+#include <net/packet-buf.hpp>
 #include <noxx/array.hpp>
 #include <noxx/bits.hpp>
 #include <noxx/buf-reader.hpp>
@@ -107,9 +108,7 @@ auto tx_mgmt(const noxx::Span<const u8> frame) -> coop::Async<bool> {
 
     const auto packet = net::AutoPacket(net::packet_alloc(tx_headroom));
     co_ensure(packet.get() != nullptr);
-    const auto body = packet->append(frame.size());
-    co_ensure(body != nullptr, "mgmt frame too long");
-    noxx::memcpy(body, frame.data, frame.size());
+    co_ensure(net::PacketWriter(*packet).append_span(frame), "mgmt frame too long");
 
     pkt_id += 1;
     const auto info = SkbHeader::TxInfo{
@@ -710,11 +709,11 @@ auto send_keepalive() -> coop::Async<bool> {
 
     // to-ds qos-null: addr1 = bssid, addr2 = us, addr3 = bssid, no payload
     // (ref umac_datapath_build_3addr_to_ds_qos_null)
-    co_unwrap(qos, (dot11::QosData*)packet->append(sizeof(dot11::QosData)));
-    qos = {
+    auto w = net::PacketWriter(*packet);
+    co_ensure(w.append_obj(dot11::QosData{
         .header      = make_mgmt_header(dot11::Fc::QosNull | dot11::Fc::ToDs, link.bssid, link.mac, link.bssid),
         .qos_control = 0,
-    };
+    }));
 
     pkt_id += 1;
     const auto info = SkbHeader::TxInfo{
@@ -796,24 +795,19 @@ auto eth_tx(const dot11::MacAddr& dst, const u16 ethertype, const noxx::Span<con
     co_ensure(link.aid != 0, "not associated");
     const auto packet = net::AutoPacket(net::packet_alloc(tx_headroom));
     co_ensure(packet.get() != nullptr);
+    auto w = net::PacketWriter(*packet);
 
     // qos data to the ds: addr1 = bssid, addr2 = us, addr3 = final destination
     // (ref umac_datapath_construct_80211_data_header_sta). the protected bit is
     // set once the pairwise key is installed; the fw does the ccmp encryption
-    const auto fc  = dot11::Fc::QosData | dot11::Fc::ToDs | (link.encrypted ? dot11::Fc::Protected : 0);
-    const auto hdr = packet->append(sizeof(dot11::QosData) + dot11::llc_snap_len);
-    co_ensure(hdr != nullptr);
-    auto w = noxx::SpanWriter(noxx::Span<u8>(hdr, sizeof(dot11::QosData) + dot11::llc_snap_len));
+    const auto fc = dot11::Fc::QosData | dot11::Fc::ToDs | (link.encrypted ? dot11::Fc::Protected : 0);
     co_ensure(w.append_obj(dot11::QosData{
         .header      = make_mgmt_header(fc, link.bssid, link.mac, dst),
         .qos_control = 0, // tid 0
     }));
     co_ensure(w.append_obj(dot11::llc_snap));
     co_ensure(w.append_obj(noxx::byteswap(ethertype)));
-
-    const auto body = packet->append(payload.size());
-    co_ensure(body != nullptr, "payload too long");
-    noxx::memcpy(body, payload.data, payload.size());
+    co_ensure(w.append_span(payload), "payload too long");
 
     // multicast frames are not acked, they ride the no-ack data channel
     // (ref mmdrv_tx_frame)

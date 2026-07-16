@@ -3,6 +3,7 @@
 #include "arp.hpp"
 #include "ethernet.hpp"
 #include "ip.hpp"
+#include "packet-buf.hpp"
 #include "stack.hpp"
 
 #include <noxx/assert.hpp>
@@ -56,8 +57,7 @@ auto send(Stack& stack, const u16 op, MacAddrRef eth_dst, MacAddrRef arp_target_
 
     auto packet = AutoPacket(packet_alloc(sizeof(EthernetHeader)));
     co_ensure(packet.get() != nullptr);
-    co_unwrap(dst, packet->append(sizeof(body)));
-    noxx::memcpy(&dst, &body, sizeof(body));
+    co_ensure(PacketWriter(*packet).append_obj(body));
     co_return co_await stack.eth_send(eth_dst, EtherType::Arp, noxx::move(packet));
 }
 

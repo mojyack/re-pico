@@ -1,6 +1,7 @@
 #include <coop/promise.hpp>
 #include <coop/timer.hpp>
 #include <hal/time.hpp>
+#include <net/packet-buf.hpp>
 #include <noxx/algorithm.hpp>
 #include <noxx/array.hpp>
 #include <noxx/defer.hpp>
@@ -86,16 +87,15 @@ auto send_command(const u16 id, const noxx::Span<const u8> req, const noxx::Span
     const auto packet = net::AutoPacket(net::packet_alloc(tx_headroom));
     co_ensure(packet.get() != nullptr);
 
-    co_unwrap(header, (CommandHeader*)packet->append(sizeof(CommandHeader)));
-    header = CommandHeader{
+    auto w = net::PacketWriter(*packet);
+    co_ensure(w.append_obj(CommandHeader{
         .flags      = CommandFlag::Req,
         .message_id = id,
         .len        = u16(req.size()),
         .host_id    = host_id,
         .vif_id     = vif,
-    };
-    co_unwrap(payload, packet->append(req.size()));
-    noxx::memcpy(&payload, req.data, req.size());
+    }));
+    co_ensure(w.append_span(req));
     co_ensure(co_await yaps_tx(SkbChan::Command, *packet));
 
     // await the matching response, backlogging unrelated frames meanwhile
