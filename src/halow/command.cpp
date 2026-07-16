@@ -7,6 +7,7 @@
 #include <noxx/format.hpp>
 
 #include "command.hpp"
+#include "dot11.hpp"
 #include "util.hpp"
 #include "yaps.hpp"
 
@@ -39,6 +40,19 @@ auto command_payload(const net::Packet& packet) -> const CommandHeader* {
         return nullptr;
     }
     return header;
+}
+
+// s1g beacons stream in continuously once a channel is set and nobody
+// consumes them; drop them at the demux point so they cannot crowd the
+// bounded rx backlog and the packet pool out of useful frames
+auto is_s1g_beacon(const net::Packet& packet) -> bool {
+    const auto skbh = parse_skb_header(packet);
+    if(skbh == nullptr || skbh->channel == SkbChan::TxStatus || skbh->len < sizeof(u16)) {
+        return false;
+    }
+    const auto body = packet_frame(packet, *skbh);
+    const auto fc   = u16(body[0]) | u16(body[1]) << 8;
+    return (fc & dot11::Fc::VerTypeSubMask) == dot11::Fc::S1gBeacon;
 }
 
 // consume a command-channel frame that is not the awaited response
@@ -87,15 +101,19 @@ auto send_command(const u16 id, const noxx::Span<const u8> req, const noxx::Span
     // await the matching response, backlogging unrelated frames meanwhile
     const auto deadline = time::now() + response_timeout_us;
     while(true) {
-        co_unwrap(rx, yaps_rx());
-        if(!rx) {
+        // a transient rx error must not fail the command, keep waiting
+        auto rx_o = yaps_rx();
+        if(!rx_o || !*rx_o) {
             co_ensure(time::now() < deadline, "command response timeout");
             co_await coop::sleep_ms(2);
             continue;
         }
+        auto&      rx   = *rx_o;
         const auto rcmd = command_payload(*rx);
         if(rcmd == nullptr) {
-            push_rx_backlog(rx.get());
+            if(!is_s1g_beacon(*rx)) {
+                push_rx_backlog(rx.release());
+            }
             continue;
         }
         if(!(rcmd->flags & CommandFlag::Resp) || rcmd->message_id != id || (rcmd->host_id & host_id_seq_mask) != host_id) {
@@ -139,6 +157,9 @@ auto fetch_rx() -> coop::Async<noxx::Optional<net::AutoPacket>> {
     }
     if(const auto cmd = command_payload(*rx); cmd != nullptr) {
         log_stray_command(*cmd);
+        co_return net::AutoPacket();
+    }
+    if(is_s1g_beacon(*rx)) {
         co_return net::AutoPacket();
     }
     co_return move(rx);

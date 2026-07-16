@@ -19,8 +19,7 @@ constexpr auto gtk_max = usize(32);
 // ref RSN_KEY_DATA_*
 // ref IEEE 802.11-2020 12.7.2 table 12-9
 namespace kde {
-constexpr auto rsn_oui    = noxx::Array<u8, 3>{0x00, 0x0f, 0xac};
-constexpr auto element_id = 221; // 802.11 element ID, vendor-specific
+constexpr auto rsn_oui = noxx::Array<u8, 3>{0x00, 0x0f, 0xac};
 
 struct Type {
     enum : u8 {

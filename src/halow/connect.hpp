@@ -15,13 +15,16 @@ struct LinkStatus {
     net::MacAddr bssid;
     net::MacAddr mac;
     u32          freq_khz;
-    bool         up = false;
+    bool         up        = false;
+    bool         encrypted = false;
 };
 
-// scan for ssid and associate with open authentication. on success a
-// background maintenance task (link_task) is spawned that keeps the link
-// alive, decodes incoming data frames and tears the link down on loss
-auto connect(const net::MacAddr& mac, noxx::StringView ssid) -> coop::Async<bool>;
+// scan for ssid and associate. with an empty password this is open
+// authentication; with a password it runs WPA3-SAE (H2E) auth, the RSN 4-way
+// handshake and installs the CCMP keys. on success a background maintenance
+// task (link_task) is spawned that keeps the link alive, decodes incoming
+// data frames and tears the link down on loss
+auto connect(const net::MacAddr& mac, noxx::StringView ssid, noxx::StringView password = {}) -> coop::Async<bool>;
 
 // deauthenticate and tear the interface down
 auto disconnect() -> coop::Async<bool>;

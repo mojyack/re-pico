@@ -1,5 +1,6 @@
 #include <coop/promise.hpp>
 #include <coop/timer.hpp>
+#include <crypto/ie.hpp>
 #include <hal/time.hpp>
 #include <halow-fw-blob.hpp>
 #include <halow-regdb.hpp>
@@ -96,21 +97,20 @@ auto build_probe_request(noxx::BufWriter& w, const dot11::MacAddr& mac, const no
     constexpr auto error_value = false;
 
     // mgmt header, da/bssid broadcast
-    unwrap(header, w.alloc_obj<dot11::Header>());
-    header = {
+    ensure(w.append_obj(dot11::Header{
         .frame_control = dot11::Fc::ProbeReq,
         .addr1         = broadcast_mac,
         .addr2         = mac,
         .addr3         = broadcast_mac,
-    };
+    }));
 
     // ssid ie, empty = wildcard
-    unwrap(ssid_ie, w.alloc_obj<dot11::IeHeader>());
-    ssid_ie = {dot11::Ie::Ssid, u8(ssid.size())};
+    ensure(w.append_obj(crypto::ie::Header{
+        .id     = crypto::ie::Id::Ssid,
+        .length = u8(ssid.size()),
+    }));
     ensure(w.append_span({(const u8*)ssid.data(), ssid.size()}));
-
-    unwrap(caps, w.alloc_obj<dot11::S1gCaps>());
-    caps = make_s1g_capabilities();
+    ensure(w.append_obj(make_s1g_capabilities()));
     return true;
 }
 
@@ -118,11 +118,10 @@ auto build_probe_request(noxx::BufWriter& w, const dot11::MacAddr& mac, const no
 auto build_hw_scan_req(noxx::BufWriter& w, const Regdom& regdom, const dot11::MacAddr& mac, const noxx::StringView ssid) -> bool {
     constexpr auto error_value = false;
 
-    unwrap(req, w.alloc_obj<HwScanReq>());
-    req = {
+    ensure(w.append_obj(HwScanReq{
         .flags         = HwScanFlag::Start,
         .dwell_time_ms = dwell_time_ms,
-    };
+    }));
 
     auto powers = PowerList();
     unwrap(chan_tlv, w.alloc_obj<HwScanTlvHeader>());
@@ -191,16 +190,16 @@ auto process_mgmt_frame(const net::Packet& packet, const noxx::Span<ScanResult> 
 
     // pick the ssid and s1g operation ies
     while(r.size > 0) {
-        unwrap(ieh, r.read<dot11::IeHeader>());
+        unwrap(ieh, r.read<crypto::ie::Header>());
         unwrap(body, r.read(ieh.length));
         switch(ieh.id) {
-        case dot11::Ie::Ssid:
+        case crypto::ie::Id::Ssid:
             res.ssid_len = noxx::min<usize>(ieh.length, sizeof(res.ssid));
             noxx::memcpy(res.ssid, &body, res.ssid_len);
             break;
-        case dot11::Ie::S1gOperation:
-            ensure(ieh.length + sizeof(dot11::IeHeader) >= sizeof(dot11::S1gOp));
-            res.s1g_op.emplace(*(const dot11::S1gOp*)&ieh);
+        case crypto::ie::Id::S1gOperation:
+            ensure(sizeof(ieh) + ieh.length >= sizeof(crypto::ie::S1gOp));
+            res.s1g_op.emplace(*(const crypto::ie::S1gOp*)&ieh);
             break;
         }
     }
@@ -208,19 +207,22 @@ auto process_mgmt_frame(const net::Packet& packet, const noxx::Span<ScanResult> 
 }
 } // namespace
 
-auto make_s1g_capabilities() -> dot11::S1gCaps {
-    auto caps = dot11::S1gCaps{
-        .header = {dot11::Ie::S1gCapabilities, sizeof(dot11::S1gCaps) - sizeof(dot11::IeHeader)},
+auto make_s1g_capabilities() -> crypto::ie::S1gCaps {
+    auto caps = crypto::ie::S1gCaps{
+        .header = {
+            .id     = crypto::ie::Id::S1gCapabilities,
+            .length = sizeof(crypto::ie::S1gCaps) - sizeof(crypto::ie::Header),
+        },
     };
-    caps.s1g_capabilities_info[0] = dot11::S1gCap0::SuppWidth1248Mhz;
-    caps.s1g_capabilities_info[4] = dot11::S1gCap4::StaTypeNonSensor;
-    caps.s1g_capabilities_info[7] = dot11::S1gCap7::Dup1MhzSupport;
+    caps.s1g_capabilities_info[0] = crypto::ie::S1gCaps::Cap0::SuppWidth1248Mhz;
+    caps.s1g_capabilities_info[4] = crypto::ie::S1gCaps::Cap4::StaTypeNonSensor;
+    caps.s1g_capabilities_info[7] = crypto::ie::S1gCaps::Cap7::Dup1MhzSupport;
     // mcs map: 1ss up to mcs 7, 2-4ss unsupported; stored once, then again
     // shifted across bytes 2-3 (rx/tx halves, as the reference builder does)
-    constexpr auto mcs_map = u8(dot11::S1gNssMaxMcs::Mcs7 << 0 |
-                                dot11::S1gNssMaxMcs::None << 2 |
-                                dot11::S1gNssMaxMcs::None << 4 |
-                                dot11::S1gNssMaxMcs::None << 6);
+    constexpr auto mcs_map = u8(crypto::ie::S1gNssMaxMcs::Mcs7 << 0 |
+                                crypto::ie::S1gNssMaxMcs::None << 2 |
+                                crypto::ie::S1gNssMaxMcs::None << 4 |
+                                crypto::ie::S1gNssMaxMcs::None << 6);
 
     caps.supported_s1g_mcs_and_nss_set[0] = mcs_map;
     caps.supported_s1g_mcs_and_nss_set[2] = u8(mcs_map << 1);

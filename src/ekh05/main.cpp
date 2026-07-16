@@ -163,21 +163,21 @@ constexpr auto help = R"(commands:
   help              print this message
   reboot            reboot the board
   halow ...         control mm8108
-    halow init      initialize pins
-    halow fw        download firmware blob and bcf
-    halow cmd       parse host table, start command channel
-    halow ver       query firmware version over command channel
-    halow tx [len]  send a dummy loopback frame over the yaps tx queue
-    halow rx        pop one pending from-chip frame and hexdump it
-    halow stat      dump the yaps status register block
-    halow scan [ssid]  scan for s1g access points
-    halow connect <ssid>  associate with an open s1g access point
-    halow disconnect   deauthenticate and tear the link down
-    halow link         print link status
-    halow keepalive    send a qos-null keepalive to the ap
-    halow dump [sec]   dump received ethernet frames
-    halow arp <ipv4>   broadcast an arp request over the link
-    halow saetest      run the WPA3 SAE/EAPOL crypto self-test
+    halow init                       initialize pins
+    halow fw                         download firmware blob and bcf
+    halow cmd                        parse host table, start command channel
+    halow ver                        query firmware version over command channel
+    halow tx [len]                   send a dummy loopback frame over the yaps tx queue
+    halow rx                         pop one pending from-chip frame and hexdump it
+    halow stat                       dump the yaps status register block
+    halow scan [ssid]                scan for s1g access points
+    halow connect <ssid> [password]  associate (open, or WPA3-SAE with a password)
+    halow disconnect                 deauthenticate and tear the link down
+    halow link                       print link status
+    halow keepalive                  send a qos-null keepalive to the ap
+    halow dump [sec]                 dump received ethernet frames
+    halow arp <ipv4>                 broadcast an arp request over the link
+    halow saetest                    run the WPA3 SAE/EAPOL crypto self-test
   mac               print halow mac address
   version           print dbgmcu versions
   ps                print process tree
@@ -274,7 +274,7 @@ auto handle_command(noxx::StringView line) -> coop::Async<bool> {
             }
         } else if(elms[1] == "scan") {
             co_ensure(halow_host_table, "run halow cmd first");
-            const auto ssid    = elms.size() >= 3 ? elms[2] : noxx::StringView("", 0);
+            const auto ssid    = elms.size() >= 3 ? elms[2] : noxx::StringView();
             auto       results = noxx::Array<halow::ScanResult, 8>();
             co_unwrap(count, co_await halow::scan((*halow_host_table).mac, ssid, results));
             for(auto i = usize(0); i < count; i += 1) {
@@ -287,8 +287,9 @@ auto handle_command(noxx::StringView line) -> coop::Async<bool> {
             co_ensure(co_await printf<"{} access points found\n">(count));
         } else if(elms[1] == "connect") {
             co_ensure(halow_host_table, "run halow cmd first");
-            co_ensure(elms.size() >= 3, "usage: halow connect <ssid>");
-            co_ensure(co_await halow::connect((*halow_host_table).mac, elms[2]));
+            co_ensure(elms.size() >= 3, "usage: halow connect <ssid> [password]");
+            const auto password = elms.size() >= 4 ? elms[3] : noxx::StringView();
+            co_ensure(co_await halow::connect((*halow_host_table).mac, elms[2], password));
             const auto& link = halow::link_status();
             co_ensure(co_await printf<"connected to {02x}:{02x}:{02x}:{02x}:{02x}:{02x} aid {} on {}khz\n">(
                 link.bssid[0], link.bssid[1], link.bssid[2], link.bssid[3], link.bssid[4], link.bssid[5],

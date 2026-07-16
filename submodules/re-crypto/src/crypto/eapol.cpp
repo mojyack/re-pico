@@ -9,6 +9,7 @@
 #include "aes-cmac.hpp"
 #include "aes-keywrap.hpp"
 #include "dot1x.hpp"
+#include "ie.hpp"
 #include "eapol.hpp"
 #include "kdf.hpp"
 
@@ -21,11 +22,11 @@ constexpr auto error_value = usize(0);
 // parse the GTK / IGTK KDEs out of the decrypted key data
 auto parse_key_data(const noxx::Span<const u8> kd, GroupKeys& out) -> bool {
     auto r = noxx::BufReader::from_span(kd);
-    while(r.size > 0) {
+    while(r.size >= 2) {
         unwrap(id, r.read<u8>());
         unwrap(len, r.read<u8>());
         unwrap(body, r.read_span(len));
-        if(id == kde::element_id) {
+        if(id == ie::Id::VendorSpecific) {
             auto r = noxx::BufReader::from_span(body);
             unwrap(oui, r.read_span(kde::rsn_oui.size()));
             if(oui != kde::rsn_oui) {

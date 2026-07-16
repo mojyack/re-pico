@@ -33,6 +33,14 @@ struct Optional {
         }
     }
 
+    auto operator->() -> T* {
+        return (T*)data;
+    }
+
+    auto operator->() const -> T* {
+        return (T*)data;
+    }
+
     auto operator*() -> T& {
         return *(T*)data;
     }

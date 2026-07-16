@@ -2,6 +2,10 @@
 #include <coop/runner.hpp>
 #include <coop/task-handle.hpp>
 #include <coop/timer.hpp>
+#include <crypto/eapol.hpp>
+#include <crypto/rng.hpp>
+#include <crypto/sae.hpp>
+#include <hal/rng.hpp>
 #include <hal/time.hpp>
 #include <noxx/array.hpp>
 #include <noxx/bits.hpp>
@@ -28,11 +32,46 @@ constexpr auto response_wait_us = u64(1'000'000);
 constexpr auto rx_poll_ms       = u32(5);
 constexpr auto assoc_capability = u16(dot11::CapInfo::Privacy | dot11::CapInfo::ShortPreamble |
                                       dot11::CapInfo::Qos | dot11::CapInfo::ShortSlotTime);
-constexpr auto ethertype_offset = usize(12); // within an ethernet header
+constexpr auto ethertype_offset = usize(12);      // within an ethernet header
+constexpr auto ethertype_eapol  = u16(0x888e);    // 802.1X / EAPOL
+constexpr auto eapol_timeout_us = u64(5'000'000); // covers a couple of ap m1 retransmits
+
+// RSN information element advertised in the (secure) association request and
+// echoed in EAPOL message 2: WPA3-SAE with CCMP pairwise/group and required
+// management frame protection (BIP-CMAC-128 group mgmt cipher). must match the
+// ap's `wpa_key_mgmt=SAE ieee80211w=2` config.
+constexpr auto rsn_ie = noxx::to_array<u8>({
+    // clang-format off
+    48, 26,                  // element id, length
+    0x01, 0x00,              // version 1
+    0x00, 0x0f, 0xac, 0x04,  // group data cipher: CCMP-128
+    0x01, 0x00,              // pairwise cipher count
+    0x00, 0x0f, 0xac, 0x04,  // pairwise cipher: CCMP-128
+    0x01, 0x00,              // akm suite count
+    0x00, 0x0f, 0xac, 0x08,  // akm: SAE
+    0xc0, 0x00,              // rsn capabilities: MFPR | MFPC
+    0x00, 0x00,              // pmkid count
+    0x00, 0x0f, 0xac, 0x06,  // group management cipher: BIP-CMAC-128
+    // clang-format on
+});
+// RSN extension element: SAE hash-to-element used (bit 5)
+constexpr auto rsnxe = noxx::to_array<u8>({244, 1, 0x20});
 
 auto link   = LinkStatus();
 auto seq    = u16(0); // 802.11 sequence number, shared space
 auto pkt_id = u32(0); // tx status correlation
+
+// hardware TRNG bridged to the crypto stack's Rng interface, used by SAE and
+// the EAPOL supplicant for the secret scalar / SNonce
+struct HwRng : crypto::Rng {
+    auto operator()(noxx::Span<u8> out) -> bool override {
+        return rng::fill(out);
+    }
+};
+auto hw_rng = HwRng();
+
+// PMK handed from the SAE exchange to the 4-way handshake within one connect()
+auto sae_pmk = crypto::sae::PMK();
 
 // primary channel width and rate for the current link, from the s1g operation ie
 auto prim_bw_mhz = u8(1);
@@ -152,7 +191,7 @@ auto set_sta_state(const u16 state, const u16 aid) -> coop::Async<bool> {
 }
 
 // SET_CHANNEL + SET_TXPOWER from the ap's s1g operation ie
-auto configure_channel(const dot11::S1gOp& s1g_op) -> coop::Async<bool> {
+auto configure_channel(const crypto::ie::S1gOp& s1g_op) -> coop::Async<bool> {
     constexpr auto error_value = false;
 
     const auto regdom = find_regdom();
@@ -171,14 +210,14 @@ auto configure_channel(const dot11::S1gOp& s1g_op) -> coop::Async<bool> {
     co_ensure(op_chan != nullptr && pri_chan != nullptr, "ap channel not in regdom");
 
     const auto width  = s1g_op.channel_width;
-    const auto op_bw  = FB(dot11::S1gOpWidth::OpWidth, width) + 1;
-    const auto pri_bw = FB(dot11::S1gOpWidth::PrimIs1Mhz, width) ? 1 : 2;
+    const auto op_bw  = FB(crypto::ie::S1gOp::ChanWidth::OpWidth, width) + 1;
+    const auto pri_bw = FB(crypto::ie::S1gOp::ChanWidth::PrimIs1Mhz, width) ? 1 : 2;
     co_ensure(op_bw == op_chan->bw_mhz, "op width mismatch with regdom");
 
     // index of the primary 1MHz subchannel within the operating channel
     // (ref umac_interface_calc_pri_1mhz_idx)
     auto pri_idx = (i32(pri_chan->freq_khz) - i32(op_chan->freq_khz) + i32(op_bw - pri_bw) * 500) / 1000;
-    if(pri_bw == 2 && (width & dot11::S1gOpWidth::PrimLoc)) {
+    if(pri_bw == 2 && (width & crypto::ie::S1gOp::ChanWidth::PrimLoc)) {
         pri_idx += 1;
     }
     co_ensure(pri_idx >= 0 && pri_idx < op_bw, "invalid primary channel index");
@@ -212,15 +251,16 @@ auto configure_qos() -> coop::Async<bool> {
         u16 cw_min;
         u16 cw_max;
     };
-    constexpr QosParams defaults[] = {
+    constexpr auto defaults = noxx::to_array<QosParams>({
         {3, 15, 1023}, // best effort
         {7, 15, 1023}, // background
         {2, 7, 15},    // video
         {2, 3, 7},     // voice
-    };
+    });
+
     constexpr auto txop_max_us = u32(15008);
 
-    for(auto aci = u32(0); aci < 4; aci += 1) {
+    for(auto aci = u32(0); aci < defaults.size(); aci += 1) {
         const auto req = SetQosParamsReq{
             .queue_idx             = u8(aci),
             .aifs_slot_count       = defaults[aci].aifs,
@@ -262,32 +302,233 @@ auto authenticate() -> coop::Async<bool> {
     co_ensure(false, "authentication timed out");
 }
 
-auto associate(const noxx::StringView ssid) -> coop::Async<bool> {
+// build and send an SAE authentication frame (alg 3) carrying a commit or
+// confirm payload at the given sequence number and status code
+auto tx_sae_auth(const u16 seq_num, const u16 status_code, const noxx::Span<const u8> payload) -> coop::Async<bool> {
+    constexpr auto error_value = false;
+
+    auto frame = noxx::Array<u8, 220>();
+    auto w     = noxx::BufWriter::from_span(frame);
+    co_ensure(w.append_obj(dot11::Auth{
+        .header      = make_mgmt_header(dot11::Fc::Auth, link.bssid, link.mac, link.bssid),
+        .alg         = dot11::AuthAlg::Sae,
+        .seq         = seq_num,
+        .status_code = status_code,
+    }));
+    co_ensure(w.append_span(payload));
+    co_return co_await tx_mgmt({frame.data, w.data - frame.data});
+}
+
+// receive the next SAE authentication frame from our bss at the given sequence,
+// returning its payload (after the 3-word fixed body, fcs stripped)
+auto wait_sae_auth(const u16 seq_num, u16& status_code) -> coop::Async<noxx::Optional<noxx::Vector<u8>>> {
+    constexpr auto error_value = noxx::nullopt;
+
+    co_unwrap(rx, co_await wait_mgmt(dot11::Fc::Auth, response_wait_us), "sae auth timeout");
+    co_unwrap(skbh, parse_skb_header(*rx));
+    auto r = noxx::BufReader{packet_frame(*rx, skbh), skbh.len};
+    co_unwrap(auth, r.read<dot11::Auth>(), "short sae auth frame");
+    co_ensure(auth.alg == dot11::AuthAlg::Sae, "unexpected auth alg");
+    co_ensure(auth.seq == seq_num, "unexpected sae auth sequence");
+    if(skbh.rx_status.flags & RxFlag::FcsIncluded) {
+        co_ensure(r.size >= dot11::fcs_len);
+        r.size -= dot11::fcs_len;
+    }
+    status_code = auth.status_code;
+
+    static auto payload = noxx::Array<u8, 256>();
+    co_ensure(r.size <= payload.size());
+    auto ret = noxx::Vector<u8>();
+    co_ensure(ret.resize(r.size));
+    noxx::memcpy(ret.data(), r.data, r.size);
+    co_return ret;
+}
+
+// WPA3-SAE (hash-to-element) authentication: commit/confirm exchange, leaving
+// the negotiated PMK in sae_pmk for the 4-way handshake (ref 802.11-2020 12.4)
+auto sae_authenticate(const noxx::StringView ssid, const noxx::StringView password) -> coop::Async<bool> {
+    constexpr auto error_value = false;
+
+    const auto pt      = crypto::sae::derive_pt({(const u8*)ssid.data(), ssid.size()},
+                                                {(const u8*)password.data(), password.size()});
+    auto       session = crypto::sae::Session();
+    co_ensure(session.start(pt, link.mac, link.bssid, hw_rng), "sae start failed");
+
+    auto commit     = noxx::Array<u8, 200>();
+    auto commit_len = session.write_commit(commit);
+    co_ensure(commit_len != 0, "sae write_commit failed");
+
+    // commit exchange, retrying on timeout and on an anti-clogging token request
+    auto got_commit = false;
+    for(auto attempt = u32(0); attempt < auth_tries && !got_commit; attempt += 1) {
+        co_ensure(co_await tx_sae_auth(1, crypto::sae::status_hash_to_element, {commit.data, commit_len}));
+
+        auto status  = u16(0);
+        auto payload = co_await wait_sae_auth(1, status);
+        if(!payload) {
+            log<"halow: sae commit timeout, retrying\n">();
+            continue;
+        }
+        if(status == crypto::sae::status_anti_clogging) {
+            // body is group(le16) followed by the anti-clogging token
+            co_ensure(payload->size() > 2, "empty anti-clogging token");
+            commit_len = session.write_commit(commit, noxx::Span(*payload).subspan(2));
+            co_ensure(commit_len != 0, "sae token rewrite_commit failed");
+            log<"halow: sae anti-clogging token, resending commit\n">();
+            continue;
+        }
+        co_ensure(status == crypto::sae::status_hash_to_element || status == dot11::status_success, "sae commit refused");
+        co_ensure(session.read_commit(*payload), "sae read_commit failed");
+        got_commit = true;
+    }
+    co_ensure(got_commit, "sae commit exchange failed");
+
+    // confirm exchange
+    auto       confirm = noxx::Array<u8, 64>();
+    const auto n       = session.write_confirm(confirm);
+    co_ensure(n != 0, "sae write_confirm failed");
+    co_ensure(co_await tx_sae_auth(2, dot11::status_success, {confirm.data, n}));
+
+    auto status = u16(0);
+    co_unwrap(payload, co_await wait_sae_auth(2, status), "no sae confirm");
+    co_ensure(status == dot11::status_success, "sae confirm refused");
+    co_ensure(session.verify_confirm(payload), "sae confirm verify failed");
+
+    sae_pmk = session.pmk;
+    log<"halow: sae authenticated\n">();
+    co_return true;
+}
+
+auto install_key(const u8 key_idx, const u8 cipher, const u8 key_length, const u8 key_type, const noxx::Span<const u8> key, const u64 pn) -> coop::Async<bool> {
+    constexpr auto error_value = false;
+
+    auto req = InstallKeyReq{
+        .pn         = pn,
+        .aid        = link.aid,
+        .key_idx    = key_idx,
+        .cipher     = cipher,
+        .key_length = key_length,
+        .key_type   = key_type,
+    };
+    co_ensure(key.size() <= sizeof(req.key));
+    noxx::memcpy(req.key, key.data, key.size());
+    auto resp = InstallKeyResp{};
+    co_ensure(co_await send_command(CommandId::InstallKey, as_span(req), {(u8*)&resp, sizeof(resp)}, link.vif),
+              "install key command failed");
+    co_return true;
+}
+
+// RSN 4-way handshake: drive the eapol supplicant over the datapath (EtherType
+// 0x888E data frames), then install the pairwise/group keys (ref 802.11 12.7)
+auto four_way_handshake() -> coop::Async<bool> {
+    constexpr auto error_value = false;
+
+    // key data of message 2 carries our RSN IE and RSNXE, exactly as sent in the
+    // association request; the ap rejects a mismatch (downgrade protection)
+    auto rsn_buf = noxx::Array<u8, rsn_ie.size() + rsnxe.size()>();
+    noxx::memcpy(rsn_buf.data, rsn_ie.data, rsn_ie.size());
+    noxx::memcpy(rsn_buf.data + rsn_ie.size(), rsnxe.data, rsnxe.size());
+
+    auto supp   = crypto::eapol::Supplicant();
+    supp.pmk    = {sae_pmk.data, sae_pmk.size()};
+    supp.rsn_ie = {rsn_buf.data, rsn_buf.size()};
+    supp.aa     = link.bssid;
+    supp.spa    = link.mac;
+    supp.rng    = &hw_rng;
+
+    const auto deadline = time::now() + eapol_timeout_us;
+    while(!supp.complete && time::now() < deadline) {
+        auto rx_o = co_await fetch_rx();
+        if(!rx_o || !*rx_o) {
+            co_await coop::sleep_ms(rx_poll_ms);
+            continue;
+        }
+        // decode the data frame in place, then pick out eapol by ethertype
+        if(!eth_from_rx(**rx_o)) {
+            continue;
+        }
+        const auto eth = (*rx_o)->data();
+        if((*rx_o)->len < ethertype_offset + 2) {
+            continue;
+        }
+        const auto etype = u16(eth[ethertype_offset]) << 8 | eth[ethertype_offset + 1];
+        if(etype != ethertype_eapol) {
+            continue;
+        }
+
+        const auto payload = noxx::Span<const u8>{eth + ethertype_offset + 2, (*rx_o)->len - (ethertype_offset + 2)};
+        auto       reply   = noxx::Array<u8, 256>();
+        const auto reply_n = supp.on_frame(payload, reply);
+        if(reply_n == 0) {
+            continue;
+        }
+        co_ensure(co_await eth_tx(link.bssid, ethertype_eapol, {reply.data, reply_n}), "eapol reply tx failed");
+    }
+    co_ensure(supp.complete, "4-way handshake timed out");
+
+    // pairwise key first (key index 0), then the group key(s) unwrapped from m3
+    co_ensure(co_await install_key(0, KeyCipher::AesCcm, AesKeyLen::Bits128, KeyType::Ptk,
+                                   {supp.ptk.tk.data, supp.ptk.tk.size()}, 0),
+              "install ptk failed");
+    const auto& gtk = supp.group.gtk;
+    co_ensure(co_await install_key(gtk.key_id, KeyCipher::AesCcm,
+                                   gtk.len == 32 ? AesKeyLen::Bits256 : AesKeyLen::Bits128, KeyType::Gtk,
+                                   {gtk.key, gtk.len}, 0),
+              "install gtk failed");
+    // the fw does not accept the igtk (INSTALL_KEY returns -EOPNOTSUPP); the
+    // reference driver keeps it host-side and validates BIP in software
+    // (ref umac_keys_mmdrv_install_key, supplicant_shim/bip.c). protected mgmt
+    // rx validation is not implemented yet, so the igtk is dropped here
+    if(supp.group.igtk) {
+        log<"halow: igtk received (id {}), software bip not implemented\n">((*supp.group.igtk).key_id);
+    }
+
+    link.encrypted = true;
+    log<"halow: 4-way handshake complete, keys installed\n">();
+    co_return true;
+}
+
+auto associate(const noxx::StringView ssid, const bool secure) -> coop::Async<bool> {
     constexpr auto error_value = false;
 
     // ref frame_association_request_build
-    auto frame = noxx::Array<u8, 128>();
+    auto frame = noxx::Array<u8, 192>();
     auto w     = noxx::BufWriter::from_span(frame);
-    co_unwrap(req, w.alloc_obj<dot11::AssocReq>());
-    req = {
+    co_ensure(w.append_obj(dot11::AssocReq{
         .header          = make_mgmt_header(dot11::Fc::AssocReq, link.bssid, link.mac, link.bssid),
         .capability      = assoc_capability,
         .listen_interval = 0,
-    };
-    co_unwrap(ssid_ie, w.alloc_obj<dot11::IeHeader>());
-    ssid_ie = {dot11::Ie::Ssid, u8(ssid.size())};
+    }));
+    co_ensure(w.append_obj(crypto::ie::Header{
+        .id     = crypto::ie::Id::Ssid,
+        .length = u8(ssid.size()),
+    }));
     co_ensure(w.append_span({(const u8*)ssid.data(), ssid.size()}));
-    co_unwrap(aid_ie, w.alloc_obj<dot11::IeHeader>());
-    aid_ie = {dot11::Ie::AidRequest, 1};
-    co_unwrap(aid_mode, w.alloc_obj<u8>());
-    aid_mode = 0;
+    co_ensure(w.append_obj(crypto::ie::Header{
+        .id     = crypto::ie::Id::AidRequest,
+        .length = 1,
+    }));
+    co_ensure(w.append_obj(u8(0))); // aid mode
+    // rsn information element for WPA3-SAE (the element already carries its id/length header)
+    if(secure) {
+        co_ensure(w.append_obj(rsn_ie));
+    }
     // s1g capabilities ie, must match the one sent in probe requests
-    co_unwrap(caps, w.alloc_obj<dot11::S1gCaps>());
-    caps = make_s1g_capabilities();
+    co_ensure(w.append_obj(make_s1g_capabilities()));
+    // rsn extension element (signals SAE hash-to-element), after the s1g caps
+    if(secure) {
+        co_ensure(w.append_obj(rsnxe));
+    }
     // wmm information element (ref ie_wmm_info_build)
     constexpr auto wmm_info = noxx::to_array<u8>({0x00, 0x50, 0xf2, 0x02, 0x00, 0x01, 0x00});
-    co_unwrap(wmm_ie, w.alloc_obj<dot11::IeHeader>());
-    wmm_ie = {dot11::Ie::VendorSpecific, sizeof(wmm_info)};
+    co_ensure(w.append_obj(crypto::ie::Header{
+        .id     = crypto::ie::Id::VendorSpecific,
+        .length = 0,
+    }));
+    co_ensure(w.append_obj(crypto::ie::Header{
+        .id     = crypto::ie::Id::VendorSpecific,
+        .length = u8(sizeof(wmm_info)),
+    }));
     co_ensure(w.append_obj(wmm_info));
 
     co_ensure(co_await tx_mgmt({frame.data, w.data - frame.data}));
@@ -304,12 +545,12 @@ auto associate(const noxx::StringView ssid) -> coop::Async<bool> {
         r.size -= dot11::fcs_len;
     }
     while(r.size > 0 && aid == 0) {
-        co_unwrap(ieh, r.read<dot11::IeHeader>());
-        co_unwrap(body, r.read(ieh.length));
+        co_unwrap(ieh, r.read<crypto::ie::Header>());
+        co_unwrap(body, r.read_span(ieh.length));
         switch(ieh.id) {
-        case dot11::Ie::AidResponse:
-            co_ensure(ieh.length >= sizeof(aid));
-            noxx::memcpy(&aid, &body, sizeof(aid));
+        case crypto::ie::Id::AidResponse:
+            co_ensure(body.size() >= sizeof(aid));
+            aid = *(uu16*)body.data;
             break;
         }
     }
@@ -363,11 +604,12 @@ auto handle_air_frame(net::AutoPacket rx) -> void {
 }
 } // namespace
 
-auto connect(const dot11::MacAddr& mac, const noxx::StringView ssid) -> coop::Async<bool> {
+auto connect(const dot11::MacAddr& mac, const noxx::StringView ssid, const noxx::StringView password) -> coop::Async<bool> {
     constexpr auto error_value = false;
 
     co_ensure(!link.up, "already connected");
     co_ensure(ssid.size() > 0 && ssid.size() <= ssid_max_len);
+    const auto secure = password.size() > 0;
 
     // find the ap
     auto results = noxx::Array<ScanResult, 4>();
@@ -382,12 +624,15 @@ auto connect(const dot11::MacAddr& mac, const noxx::StringView ssid) -> coop::As
     }
     co_ensure(ap != nullptr, "ap not found");
     co_ensure(ap->s1g_op, "ap has no s1g operation ie");
-    co_ensure(!(ap->capability_info & dot11::CapInfo::Privacy), "ap requires encryption, only open auth supported");
+    const auto ap_privacy = bool(ap->capability_info & dot11::CapInfo::Privacy);
+    co_ensure(secure || !ap_privacy, "ap requires encryption, pass a password");
+    co_ensure(!secure || ap_privacy, "ap is open, do not pass a password");
     log<"halow: connecting to {02x}:{02x}:{02x}:{02x}:{02x}:{02x} rssi {}\n">(
         ap->bssid[0], ap->bssid[1], ap->bssid[2], ap->bssid[3], ap->bssid[4], ap->bssid[5], ap->rssi);
 
-    link.mac   = mac;
-    link.bssid = ap->bssid;
+    link.mac       = mac;
+    link.bssid     = ap->bssid;
+    link.encrypted = false;
 
     // sta interface
     const auto if_req = AddInterfaceReq{
@@ -422,9 +667,12 @@ auto connect(const dot11::MacAddr& mac, const noxx::StringView ssid) -> coop::As
     }
 
     ok = ok && co_await configure_qos();
-    ok = ok && co_await authenticate();
+    ok = ok && (secure ? co_await sae_authenticate(ssid, password) : co_await authenticate());
     ok = ok && co_await set_sta_state(StaState::Authenticated, 0);
-    ok = ok && co_await associate(ssid);
+    ok = ok && co_await associate(ssid, secure);
+    // the 4-way handshake runs over the datapath while still authenticated, then
+    // installs the ccmp keys before the port is authorized
+    ok = ok && (secure ? co_await four_way_handshake() : true);
     ok = ok && co_await set_sta_state(StaState::Authorized, link.aid);
 
     if(!ok) {
@@ -575,20 +823,23 @@ auto link_status() -> const LinkStatus& {
 auto eth_tx(const dot11::MacAddr& dst, const u16 ethertype, const noxx::Span<const u8> payload) -> coop::Async<bool> {
     constexpr auto error_value = false;
 
-    co_ensure(link.up, "not connected");
+    // aid is assigned at association; the 4-way handshake sends eapol frames
+    // through here before connect() marks the link up
+    co_ensure(link.aid != 0, "not associated");
     const auto packet = net::AutoPacket(net::packet_alloc(tx_headroom));
     co_ensure(packet.get() != nullptr);
 
     // qos data to the ds: addr1 = bssid, addr2 = us, addr3 = final destination
-    // (ref umac_datapath_construct_80211_data_header_sta)
+    // (ref umac_datapath_construct_80211_data_header_sta). the protected bit is
+    // set once the pairwise key is installed; the fw does the ccmp encryption
+    const auto fc  = dot11::Fc::QosData | dot11::Fc::ToDs | (link.encrypted ? dot11::Fc::Protected : 0);
     const auto hdr = packet->append(sizeof(dot11::QosData) + dot11::llc_snap_len);
     co_ensure(hdr != nullptr);
     auto w = noxx::BufWriter{hdr, sizeof(dot11::QosData) + dot11::llc_snap_len};
-    co_unwrap(qos, w.alloc_obj<dot11::QosData>());
-    qos = {
-        .header      = make_mgmt_header(dot11::Fc::QosData | dot11::Fc::ToDs, link.bssid, link.mac, dst),
+    co_ensure(w.append_obj(dot11::QosData{
+        .header      = make_mgmt_header(fc, link.bssid, link.mac, dst),
         .qos_control = 0, // tid 0
-    };
+    }));
     co_ensure(w.append_obj(dot11::llc_snap));
     co_ensure(w.append_obj(noxx::byteswap(ethertype)));
 
@@ -601,7 +852,8 @@ auto eth_tx(const dot11::MacAddr& dst, const u16 ethertype, const noxx::Span<con
     const auto multicast = bool(dst[0] & 1);
     pkt_id += 1;
     const auto info = SkbHeader::TxInfo{
-        .flags  = TxFlag::ImmediateReport | BF(TxFlag::VifId, u32(link.vif)),
+        .flags  = TxFlag::ImmediateReport | BF(TxFlag::VifId, u32(link.vif)) |
+                  (link.encrypted ? (TxFlag::HwEncrypt | BF(TxFlag::KeyIdx, u32(0))) : 0),
         .pkt_id = pkt_id,
         .tid    = 0,
         .rates  = {{.rate_code = mgmt_rate(), .count = u8(multicast ? 1 : mgmt_attempts)}},
@@ -640,11 +892,18 @@ auto eth_from_rx(net::Packet& packet) -> bool {
         return false;
     }
     const auto hdr_len = is_qos ? sizeof(dot11::QosData) : sizeof(dot11::Header);
-    if(len < hdr_len + dot11::llc_snap_len) {
+    // hardware-decrypted ccmp frames keep the 8-byte ccmp header (right after
+    // the mac header) and the 8-byte mic (before the fcs); strip both so the
+    // llc/snap lands where the plaintext path expects it. ref umac_datapath
+    const auto encrypted  = bool(hdr.rx_status.flags & RxFlag::Decrypted);
+    const auto crypto_hdr = encrypted ? dot11::ccmp_hdr_len : usize(0);
+    const auto crypto_mic = encrypted ? dot11::ccmp_mic_len : usize(0);
+    if(len < hdr_len + crypto_hdr + crypto_mic + dot11::llc_snap_len) {
         log<"halow: rx short data frame len {}\n">(hdr.len);
         return false;
     }
-    const auto llc = body + hdr_len;
+    len -= crypto_mic;
+    const auto llc = body + hdr_len + crypto_hdr;
     for(auto i = usize(0); i < sizeof(dot11::llc_snap); i += 1) {
         ensure(llc[i] == dot11::llc_snap[i], "unexpected llc header");
     }
@@ -652,10 +911,10 @@ auto eth_from_rx(net::Packet& packet) -> bool {
     // rebuild the ethernet header just before the payload's ethertype:
     // da = addr1, sa = addr3 (from-ds), ethertype already in place after the
     // snap. sa is copied first, da would clobber its tail
-    const auto eth = (u8*)body + hdr_len + sizeof(dot11::llc_snap) - ethertype_offset;
+    const auto eth = (u8*)body + hdr_len + crypto_hdr + sizeof(dot11::llc_snap) - ethertype_offset;
     noxx::memcpy(eth + sizeof(dot11::MacAddr), wifi->addr3.data, sizeof(dot11::MacAddr));
     noxx::memcpy(eth + 0, wifi->addr1.data, sizeof(dot11::MacAddr));
-    packet.len = u16((body - packet.data()) + len); // drop fcs
+    packet.len = u16((body - packet.data()) + len); // drop fcs and ccmp mic
     ensure(packet.consume(usize(eth - packet.data())));
     return true;
 }

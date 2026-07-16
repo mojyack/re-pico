@@ -1,5 +1,6 @@
 #pragma once
 #include <coop/generator.hpp>
+#include <crypto/ie.hpp>
 #include <halow-regdb.hpp>
 #include <noxx/optional.hpp>
 #include <noxx/span.hpp>
@@ -20,7 +21,7 @@ struct ScanResult {
     u16            beacon_interval;
     u16            capability_info;
 
-    noxx::Optional<dot11::S1gOp> s1g_op;
+    noxx::Optional<crypto::ie::S1gOp> s1g_op;
 };
 
 // the regdom matching the country the firmware's bcf was loaded with
@@ -28,7 +29,7 @@ auto find_regdom() -> const Regdom*;
 
 // the s1g capabilities ie advertised in probe and association requests
 // (ref ie_s1g_capabilities_build)
-auto make_s1g_capabilities() -> dot11::S1gCaps;
+auto make_s1g_capabilities() -> crypto::ie::S1gCaps;
 
 // run a chip-driven scan over the regdom the firmware was loaded with;
 // a non-empty ssid narrows the probe to that network.

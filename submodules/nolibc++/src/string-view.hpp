@@ -17,6 +17,7 @@ struct StringView {
     auto operator[](usize i) const -> char;
     auto operator==(StringView other) const -> bool;
 
+    StringView() = default;
     StringView(const char* str);
     StringView(const char* str, usize len);
     StringView(const String& str);

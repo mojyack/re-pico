@@ -19,6 +19,11 @@ static_assert(sizeof(u16) == 2);
 static_assert(sizeof(u32) == 4);
 static_assert(sizeof(u64) == 8);
 
+using uu8  = __attribute__((aligned(1)))  u8;
+using uu16 = __attribute__((aligned(1))) u16;
+using uu32 = __attribute__((aligned(1))) u32;
+using uu64 = __attribute__((aligned(1))) u64;
+
 using uint = unsigned int;
 
 using v32  = volatile u32;
