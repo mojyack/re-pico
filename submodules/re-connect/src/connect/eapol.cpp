@@ -21,13 +21,13 @@ constexpr auto error_value = usize(0);
 
 // parse the GTK / IGTK KDEs out of the decrypted key data
 auto parse_key_data(const noxx::Span<const u8> kd, GroupKeys& out) -> bool {
-    auto r = noxx::BufReader::from_span(kd);
-    while(r.size >= 2) {
+    auto r = noxx::SpanReader(kd);
+    while(r.buf.size >= 2) {
         unwrap(id, r.read<u8>());
         unwrap(len, r.read<u8>());
         unwrap(body, r.read_span(len));
         if(id == ie::Id::VendorSpecific) {
-            auto r = noxx::BufReader::from_span(body);
+            auto r = noxx::SpanReader(body);
             unwrap(oui, r.read_span(kde::rsn_oui.size()));
             if(oui != kde::rsn_oui) {
                 continue;
@@ -38,9 +38,9 @@ auto parse_key_data(const noxx::Span<const u8> kd, GroupKeys& out) -> bool {
                 unwrap(id, r.read<u8>());
                 ensure(r.read(1)); // reserved
                 out.gtk.key_id = id & 0x03;
-                ensure(r.size <= gtk_max);
-                out.gtk.len = r.size;
-                noxx::memcpy(out.gtk.key, r.data, r.size);
+                ensure(r.buf.size <= gtk_max);
+                out.gtk.len = r.buf.size;
+                noxx::memcpy(out.gtk.key, r.buf.data, r.buf.size);
             } break;
             case kde::Type::Igtk: {
                 unwrap(id, r.read<u16>());
@@ -65,7 +65,7 @@ auto build_reply(const noxx::Span<u8>         out,
                  const NonceRef               nonce,
                  const noxx::Span<const u8>   key_data,
                  const crypto::Aes128::KeyRef kck) -> usize {
-    auto w = noxx::BufWriter::from_span(out);
+    auto w = noxx::SpanWriter(out);
     unwrap(header, w.alloc_obj<dot1x::Header>());
     unwrap(kp, w.alloc_obj<dot1x::KeyPacket>());
     unwrap(kd, w.alloc(key_data.size()));
@@ -91,9 +91,9 @@ auto build_reply(const noxx::Span<u8>         out,
         noxx::memcpy(&kd, key_data.data, key_data.size());
     }
 
-    crypto::aes_cmac(crypto::Aes128(kck), {out.data, w.data - out.data}, crypto::Aes128::BlockMutRef(kp.mic));
+    crypto::aes_cmac(crypto::Aes128(kck), {out.data, w.buf.data - out.data}, crypto::Aes128::BlockMutRef(kp.mic));
 
-    return w.data - out.data;
+    return w.buf.data - out.data;
 }
 } // namespace
 
@@ -107,7 +107,7 @@ auto derive_ptk(const noxx::Span<const u8> pmk, const MacAddrRef aa, const MacAd
     const auto n_hi     = n_swap ? snonce : anonce;
 
     auto data = noxx::Array<u8, aa.size() + spa.size() + anonce.size() + snonce.size()>();
-    auto w    = noxx::BufWriter::from_span(data);
+    auto w    = noxx::SpanWriter(data);
     w.append_span(mac_lo);
     w.append_span(mac_hi);
     w.append_span(n_lo);
@@ -120,7 +120,7 @@ auto derive_ptk(const noxx::Span<const u8> pmk, const MacAddrRef aa, const MacAd
 }
 
 auto Supplicant::on_frame(const noxx::Span<const u8> in, const noxx::Span<u8> out) -> usize {
-    auto r = noxx::BufReader::from_span(in);
+    auto r = noxx::SpanReader(in);
     unwrap(header, r.read<dot1x::Header>());
     unwrap(kp, r.read<dot1x::KeyPacket>());
     ensure(header.type == dot1x::Header::Type::Key, "not an rsn eapol-key");
@@ -159,7 +159,7 @@ auto Supplicant::on_frame(const noxx::Span<const u8> in, const noxx::Span<u8> ou
     noxx::memset((u8*)kp.mic, 0, sizeof(kp.mic)); //  FIXME: this overwriting const u8
     // - compute mac
     auto got_mic = noxx::Array<u8, sizeof(dot1x::KeyPacket::mic)>();
-    crypto::aes_cmac(crypto::Aes128(ptk.kck), {in.data, r.data - in.data}, got_mic);
+    crypto::aes_cmac(crypto::Aes128(ptk.kck), {in.data, r.buf.data - in.data}, got_mic);
     // - compare them
     ensure(orig_mic == got_mic, "m3 mic mismatch");
 

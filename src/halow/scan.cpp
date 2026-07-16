@@ -1,6 +1,6 @@
+#include <connect/ie.hpp>
 #include <coop/promise.hpp>
 #include <coop/timer.hpp>
-#include <connect/ie.hpp>
 #include <hal/time.hpp>
 #include <halow-fw-blob.hpp>
 #include <halow-regdb.hpp>
@@ -93,7 +93,7 @@ auto pack_channel(const S1gChannel& channel, const u32 pwr_idx) -> u32 {
 
 // probe request frame: pv0 mgmt header + ssid ie + s1g capabilities ie
 // (ref umac/frames/probe_request.c)
-auto build_probe_request(noxx::BufWriter& w, const dot11::MacAddr& mac, const noxx::StringView ssid) -> bool {
+auto build_probe_request(noxx::SpanWriter& w, const dot11::MacAddr& mac, const noxx::StringView ssid) -> bool {
     constexpr auto error_value = false;
 
     // mgmt header, da/bssid broadcast
@@ -115,7 +115,7 @@ auto build_probe_request(noxx::BufWriter& w, const dot11::MacAddr& mac, const no
 }
 
 // hw scan request payload: flags, dwell, then chan list / power list / probe request tlvs
-auto build_hw_scan_req(noxx::BufWriter& w, const Regdom& regdom, const dot11::MacAddr& mac, const noxx::StringView ssid) -> bool {
+auto build_hw_scan_req(noxx::SpanWriter& w, const Regdom& regdom, const dot11::MacAddr& mac, const noxx::StringView ssid) -> bool {
     constexpr auto error_value = false;
 
     ensure(w.append_obj(HwScanReq{
@@ -146,9 +146,9 @@ auto build_hw_scan_req(noxx::BufWriter& w, const Regdom& regdom, const dot11::Ma
     unwrap(probe_tlv, w.alloc_obj<HwScanTlvHeader>());
     probe_tlv = {.tag = HwScanTlvTag::ProbeReq};
 
-    const auto data_before = w.data;
+    const auto data_before = w.buf.data;
     ensure(build_probe_request(w, mac, ssid));
-    probe_tlv.len = u16(w.data - data_before);
+    probe_tlv.len = u16(w.buf.data - data_before);
     return true;
 }
 
@@ -162,10 +162,10 @@ auto process_mgmt_frame(const net::Packet& packet, const noxx::Span<ScanResult> 
     if(skbh.channel != SkbChan::Data && skbh.channel != SkbChan::Mgmt && skbh.channel != SkbChan::Beacon) {
         return count;
     }
-    auto r = noxx::BufReader{packet_frame(packet, skbh), skbh.len};
+    auto r = noxx::SpanReader(noxx::Span<const u8>{packet_frame(packet, skbh), skbh.len});
     if(skbh.rx_status.flags & RxFlag::FcsIncluded) {
-        ensure(r.size >= dot11::fcs_len);
-        r.size -= dot11::fcs_len;
+        ensure(r.buf.size >= dot11::fcs_len);
+        r.buf.size -= dot11::fcs_len;
     }
     unwrap(resp, r.read<dot11::ProbeResponse>());
     if((resp.header.frame_control & dot11::Fc::VerTypeSubMask) != dot11::Fc::ProbeResp) {
@@ -189,7 +189,7 @@ auto process_mgmt_frame(const net::Packet& packet, const noxx::Span<ScanResult> 
     res.ssid_len        = 0;
 
     // pick the ssid and s1g operation ies
-    while(r.size > 0) {
+    while(r.buf.size > 0) {
         unwrap(ieh, r.read<connect::ie::Header>());
         unwrap(body, r.read(ieh.length));
         switch(ieh.id) {
@@ -260,9 +260,9 @@ auto scan(const dot11::MacAddr& mac, const noxx::StringView ssid, const noxx::Sp
     }
 
     auto req = noxx::Array<u8, hw_scan_req_max>();
-    auto w   = noxx::BufWriter::from_span(req);
+    auto w   = noxx::SpanWriter(req);
     co_ensure(build_hw_scan_req(w, *regdom, mac, ssid), "hw scan request too long");
-    const auto started = co_await send_command(CommandId::HwScan, noxx::Span<const u8>{req.data, w.data - req.data}, {}, vif);
+    const auto started = co_await send_command(CommandId::HwScan, noxx::Span<const u8>{req.data, w.buf.data - req.data}, {}, vif);
 
     // collect probe responses until the scan done event
     auto count = usize(0);

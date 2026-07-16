@@ -147,7 +147,7 @@ auto wait_mgmt(const u16 frame_control, const u64 timeout_us) -> coop::Async<nox
             log_tx_status(*rx, skbh);
             continue;
         }
-        auto r = noxx::BufReader{packet_frame(*rx, skbh), skbh.len};
+        auto r = noxx::SpanReader(noxx::Span<const u8>{packet_frame(*rx, skbh), skbh.len});
         co_unwrap(header, r.read<dot11::Header>());
         if((header.frame_control & dot11::Fc::VerTypeSubMask) != frame_control) {
             log<"halow: connect skipping frame fc 0x{04x}\n">(header.frame_control);
@@ -275,7 +275,7 @@ auto authenticate() -> coop::Async<bool> {
         }
 
         co_unwrap(skbh, parse_skb_header(**rx_o));
-        auto r = noxx::BufReader{packet_frame(**rx_o, skbh), skbh.len};
+        auto r = noxx::SpanReader(noxx::Span<const u8>{packet_frame(**rx_o, skbh), skbh.len});
         co_unwrap(auth, r.read<dot11::Auth>(), "short auth response");
         co_ensure(auth.alg == dot11::AuthAlg::Open && auth.seq == 2, "unexpected auth response");
         co_ensure(auth.status_code == dot11::status_success, "authentication refused");
@@ -290,7 +290,7 @@ auto tx_sae_auth(const u16 seq_num, const u16 status_code, const noxx::Span<cons
     constexpr auto error_value = false;
 
     auto frame = noxx::Array<u8, 220>();
-    auto w     = noxx::BufWriter::from_span(frame);
+    auto w     = noxx::SpanWriter(frame);
     co_ensure(w.append_obj(dot11::Auth{
         .header      = make_mgmt_header(dot11::Fc::Auth, link.bssid, link.mac, link.bssid),
         .alg         = dot11::AuthAlg::Sae,
@@ -298,7 +298,7 @@ auto tx_sae_auth(const u16 seq_num, const u16 status_code, const noxx::Span<cons
         .status_code = status_code,
     }));
     co_ensure(w.append_span(payload));
-    co_return co_await tx_mgmt({frame.data, w.data - frame.data});
+    co_return co_await tx_mgmt({frame.data, w.buf.data - frame.data});
 }
 
 // receive the next SAE authentication frame from our bss at the given sequence,
@@ -308,21 +308,21 @@ auto wait_sae_auth(const u16 seq_num, u16& status_code) -> coop::Async<noxx::Opt
 
     co_unwrap(rx, co_await wait_mgmt(dot11::Fc::Auth, response_wait_us), "sae auth timeout");
     co_unwrap(skbh, parse_skb_header(*rx));
-    auto r = noxx::BufReader{packet_frame(*rx, skbh), skbh.len};
+    auto r = noxx::SpanReader(noxx::Span<const u8>{packet_frame(*rx, skbh), skbh.len});
     co_unwrap(auth, r.read<dot11::Auth>(), "short sae auth frame");
     co_ensure(auth.alg == dot11::AuthAlg::Sae, "unexpected auth alg");
     co_ensure(auth.seq == seq_num, "unexpected sae auth sequence");
     if(skbh.rx_status.flags & RxFlag::FcsIncluded) {
-        co_ensure(r.size >= dot11::fcs_len);
-        r.size -= dot11::fcs_len;
+        co_ensure(r.buf.size >= dot11::fcs_len);
+        r.buf.size -= dot11::fcs_len;
     }
     status_code = auth.status_code;
 
     static auto payload = noxx::Array<u8, 256>();
-    co_ensure(r.size <= payload.size());
+    co_ensure(r.buf.size <= payload.size());
     auto ret = noxx::Vector<u8>();
-    co_ensure(ret.resize(r.size));
-    noxx::memcpy(ret.data(), r.data, r.size);
+    co_ensure(ret.resize(r.buf.size));
+    noxx::memcpy(ret.data(), r.buf.data, r.buf.size);
     co_return ret;
 }
 
@@ -474,7 +474,7 @@ auto associate(const noxx::StringView ssid, const bool secure) -> coop::Async<bo
 
     // ref frame_association_request_build
     auto frame = noxx::Array<u8, 192>();
-    auto w     = noxx::BufWriter::from_span(frame);
+    auto w     = noxx::SpanWriter(frame);
     co_ensure(w.append_obj(dot11::AssocReq{
         .header          = make_mgmt_header(dot11::Fc::AssocReq, link.bssid, link.mac, link.bssid),
         .capability      = assoc_capability,
@@ -512,20 +512,20 @@ auto associate(const noxx::StringView ssid, const bool secure) -> coop::Async<bo
     }));
     co_ensure(w.append_obj(wmm_info));
 
-    co_ensure(co_await tx_mgmt({frame.data, w.data - frame.data}));
+    co_ensure(co_await tx_mgmt({frame.data, w.buf.data - frame.data}));
     co_unwrap(rx, co_await wait_mgmt(dot11::Fc::AssocResp, response_wait_us), "no association response");
     co_unwrap(skbh, parse_skb_header(*rx));
-    auto r = noxx::BufReader{packet_frame(*rx, skbh), skbh.len};
+    auto r = noxx::SpanReader(noxx::Span<const u8>{packet_frame(*rx, skbh), skbh.len});
     co_unwrap(resp, r.read<dot11::AssocResp>(), "short assoc response");
     co_ensure(resp.status_code == dot11::status_success, "association refused");
 
     // aid comes in the s1g aid response ie
     auto aid = u16(0);
     if(skbh.rx_status.flags & RxFlag::FcsIncluded) {
-        co_ensure(r.size >= dot11::fcs_len);
-        r.size -= dot11::fcs_len;
+        co_ensure(r.buf.size >= dot11::fcs_len);
+        r.buf.size -= dot11::fcs_len;
     }
-    while(r.size > 0 && aid == 0) {
+    while(r.buf.size > 0 && aid == 0) {
         co_unwrap(ieh, r.read<connect::ie::Header>());
         co_unwrap(body, r.read_span(ieh.length));
         switch(ieh.id) {
@@ -803,7 +803,7 @@ auto eth_tx(const dot11::MacAddr& dst, const u16 ethertype, const noxx::Span<con
     const auto fc  = dot11::Fc::QosData | dot11::Fc::ToDs | (link.encrypted ? dot11::Fc::Protected : 0);
     const auto hdr = packet->append(sizeof(dot11::QosData) + dot11::llc_snap_len);
     co_ensure(hdr != nullptr);
-    auto w = noxx::BufWriter{hdr, sizeof(dot11::QosData) + dot11::llc_snap_len};
+    auto w = noxx::SpanWriter(noxx::Span<u8>(hdr, sizeof(dot11::QosData) + dot11::llc_snap_len));
     co_ensure(w.append_obj(dot11::QosData{
         .header      = make_mgmt_header(fc, link.bssid, link.mac, dst),
         .qos_control = 0, // tid 0

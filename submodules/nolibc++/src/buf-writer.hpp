@@ -5,9 +5,14 @@
 #include "assert.hpp"
 
 namespace noxx {
+template <class T>
+concept BufWriterBuffer = requires(T& buf) {
+    { buf.alloc(usize()) } -> same_as<u8*>;
+};
+
+template <BufWriterBuffer Buf>
 struct BufWriter {
-    u8*   data;
-    usize size;
+    Buf buf;
 
     template <class T>
     auto append_obj(const T& obj) -> bool {
@@ -32,6 +37,22 @@ struct BufWriter {
     }
 
     auto alloc(const usize len) -> u8* {
+        return buf.alloc(len);
+    }
+
+    BufWriter() = default;
+
+    template <class... Args>
+    BufWriter(Args&&... args)
+        : buf(forward<Args>(args)...) {
+    }
+};
+
+struct BufWriterSpanBuffer {
+    u8*   data;
+    usize size;
+
+    auto alloc(const usize len) -> u8* {
         constexpr auto error_value = nullptr;
         ensure(size >= len);
         data += len;
@@ -39,9 +60,15 @@ struct BufWriter {
         return data - len;
     }
 
-    static auto from_span(noxx::Span<u8> span) -> BufWriter {
-        return {span.data, span.size()};
+    BufWriterSpanBuffer() = default;
+
+    BufWriterSpanBuffer(noxx::Span<u8> span)
+        : data(span.data),
+          size(span.size()) {
     }
 };
+
+using SpanWriter = BufWriter<BufWriterSpanBuffer>;
 } // namespace noxx
+
 #include "assert.hpp"

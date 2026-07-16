@@ -34,13 +34,13 @@ const auto aa  = connect::MacAddr{0x00, 0x60, 0xad, 0x80, 0x1f, 0x51};
 const auto spa = connect::MacAddr{0x0c, 0xbf, 0x74, 0x00, 0x00, 0x0a};
 
 // build a raw EAPOL-Key frame; key_data is already plaintext-or-wrapped bytes
-auto build_frame(const noxx::Span<u8>          out,
-                 const u16                     key_info,
-                 const u64                     replay,
+auto build_frame(const noxx::Span<u8>           out,
+                 const u16                      key_info,
+                 const u64                      replay,
                  const connect::eapol::NonceRef nonce,
-                 const noxx::Span<const u8>    key_data,
-                 const crypto::Aes128::Key*    kck_for_mic) -> usize {
-    auto w = noxx::BufWriter::from_span(out);
+                 const noxx::Span<const u8>     key_data,
+                 const crypto::Aes128::Key*     kck_for_mic) -> usize {
+    auto w = noxx::SpanWriter(out);
     unwrap(header, w.alloc_obj<connect::dot1x::Header>());
     unwrap(kp, w.alloc_obj<connect::dot1x::KeyPacket>());
     unwrap(kd, w.alloc(key_data.size()));
@@ -60,14 +60,14 @@ auto build_frame(const noxx::Span<u8>          out,
     noxx::memcpy(kp.nonce, nonce.data, nonce.size());
     noxx::memcpy(&kd, key_data.data, key_data.size());
     if(kck_for_mic != nullptr) {
-        crypto::aes_cmac(crypto::Aes128(*kck_for_mic), {out.data, w.data - out.data}, crypto::Aes128::BlockMutRef{kp.mic});
+        crypto::aes_cmac(crypto::Aes128(*kck_for_mic), {out.data, w.buf.data - out.data}, crypto::Aes128::BlockMutRef{kp.mic});
     }
-    return w.data - out.data;
+    return w.buf.data - out.data;
 }
 
 // append a GTK or IGTK 00-0F-AC KDE holding key
-auto append_gtk_kde(noxx::BufWriter& w, const u8 type, const u16 id_byte, const noxx::Span<const u8> key) -> void {
-    const auto orig = w.data;
+auto append_gtk_kde(noxx::SpanWriter& w, const u8 type, const u16 id_byte, const noxx::Span<const u8> key) -> void {
+    const auto orig = w.buf.data;
 
     w.append_obj(u8(connect::ie::Id::VendorSpecific));
     auto& len = *w.alloc_obj<u8>(); // later
@@ -85,11 +85,11 @@ auto append_gtk_kde(noxx::BufWriter& w, const u8 type, const u16 id_byte, const 
         w.append_span(key);
         break;
     }
-    len = w.data - orig - 2 /* exclude id and len */;
+    len = w.buf.data - orig - 2 /* exclude id and len */;
 }
 
 auto verify_mic(const noxx::Span<const u8> m, const connect::eapol::Ptk::KCK& kck) -> bool {
-    auto r = noxx::BufReader::from_span(m);
+    auto r = noxx::SpanReader(m);
     unwrap(header, r.read<connect::dot1x::Header>());
     (void)header;
     unwrap(kp, r.read<connect::dot1x::KeyPacket>());
@@ -156,13 +156,13 @@ auto full_handshake() -> bool {
         igtk[i] = u8(0xb0 + i);
     }
     auto kd = noxx::Array<u8, 128>();
-    auto w  = noxx::BufWriter::from_span(kd);
+    auto w  = noxx::SpanWriter(kd);
     append_gtk_kde(w, eapol::kde::Type::Gtk, 0x01, gtk);
     append_gtk_kde(w, eapol::kde::Type::Igtk, 0x04, igtk);
-    while((w.data - kd.data) % 8 != 0) { // pad to an 8-byte multiple
+    while((w.buf.data - kd.data) % 8 != 0) { // pad to an 8-byte multiple
         w.append_obj(u8(0));
     }
-    const auto kd_len  = w.data - kd.data;
+    const auto kd_len  = w.buf.data - kd.data;
     auto       wrapped = noxx::Array<u8, 160>();
     ensure(crypto::aes_key_wrap(crypto::Aes128(auth_ptk.kek), {kd.data, kd_len}, wrapped.data));
 
@@ -228,12 +228,12 @@ auto bad_mic_rejected() -> bool {
     for(auto i = 0uz; i < gtk.size(); i += 1) {
         gtk[i] = u8(i);
     }
-    auto w = noxx::BufWriter::from_span(kd);
+    auto w = noxx::SpanWriter(kd);
     append_gtk_kde(w, eapol::kde::Type::Gtk, 0x01, gtk);
-    while((w.data - kd.data) % 8 != 0) { // pad to an 8-byte multiple
+    while((w.buf.data - kd.data) % 8 != 0) { // pad to an 8-byte multiple
         w.append_obj(u8(0));
     }
-    const auto kd_len  = w.data - kd.data;
+    const auto kd_len  = w.buf.data - kd.data;
     auto       wrapped = noxx::Array<u8, 160>();
     ensure(crypto::aes_key_wrap(crypto::Aes128(auth_ptk.kek), {kd.data, kd_len}, wrapped.data));
     auto       m3     = noxx::Array<u8, 256>();
