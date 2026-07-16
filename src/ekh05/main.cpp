@@ -163,9 +163,7 @@ constexpr auto help = R"(commands:
   help              print this message
   reboot            reboot the board
   halow ...         control mm8108
-    halow init                       initialize pins
-    halow fw                         download firmware blob and bcf
-    halow cmd                        parse host table, start command channel
+    halow init                       init pins, download firmwares, start command channel
     halow ver                        query firmware version over command channel
     halow tx [len]                   send a dummy loopback frame over the yaps tx queue
     halow rx                         pop one pending from-chip frame and hexdump it
@@ -200,10 +198,12 @@ auto handle_command(noxx::StringView line) -> coop::Async<bool> {
     } else if(elms[0] == "halow") {
         co_ensure(elms.size() >= 2);
         if(elms[1] == "init") {
+            // init pins
             co_ensure(prepare_pins_for_halow());
             co_ensure(co_await halow::init());
-            co_await print("halow initialized\n");
-        } else if(elms[1] == "fw") {
+            co_await print("chip initialized\n");
+
+            // download firmware blob and bcf
             co_unwrap(id, halow::read_u32(halow::Reg::ChipID));
             co_ensure(co_await printf<"halow chip id 0x{08x}\n">(id));
             co_unwrap(fw, co_await halow::load_firmware());
@@ -217,7 +217,8 @@ auto handle_command(noxx::StringView line) -> coop::Async<bool> {
             } else {
                 co_await print("halow firmware booted\n");
             }
-        } else if(elms[1] == "cmd") {
+
+            // start command channel
             co_unwrap(ptr, halow::host_table_ptr());
             co_unwrap(table, halow::parse_host_table(ptr));
             halow::init_yaps(table.yaps);
