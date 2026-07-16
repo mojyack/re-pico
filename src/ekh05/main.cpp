@@ -184,13 +184,12 @@ constexpr auto help = R"(commands:
     halow disconnect                 deauthenticate and tear the link down
     halow link                       print link status
     halow keepalive                  send a qos-null keepalive to the ap
-    halow arp <ipv4>                 broadcast an arp request over the link
     halow saetest                    run the WPA3 SAE/EAPOL crypto self-test
   net ...           network utilities
     net up                           bring the ip stack up over the halow link
     net ip <addr> [mask [gw]]        configure the ip address
     net ping <addr> [count]          send icmp echo requests
-    net arp                          print the arp table
+    net arp [ipv4]                   broadcast a who-has, or print the arp table
   mac               print halow mac address
   version           print dbgmcu versions
   ps                print process tree
@@ -320,23 +319,6 @@ auto handle_command(noxx::StringView line) -> coop::Async<bool> {
             } else {
                 co_ensure(co_await printf<"link up: bssid {} aid {} {}khz\n">(link.bssid, link.aid, link.freq_khz));
             }
-        } else if(elms[1] == "arp") {
-            co_ensure(elms.size() >= 3, "usage: halow arp <target-ipv4> [sender-ipv4]");
-            co_unwrap(ip, net::parse_ip(elms[2]));
-            auto sender = net::IPv4Addr();
-            if(elms.size() >= 4) {
-                co_unwrap(ip, net::parse_ip(elms[3]));
-                sender = ip;
-            }
-            const auto& link = halow::link_status();
-            co_ensure(link.up, "not connected");
-            auto arp = net::arp::build_request(link.mac, sender, ip);
-            // "uni" sends the request unicast to the ap itself, which is acked
-            // over the air and exercises the reliable data path
-            constexpr auto broadcast = net::MacAddr{0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
-            const auto&    dst       = (elms.size() >= 5 && elms[4] == "uni") ? halow::link_status().bssid : broadcast;
-            co_ensure(co_await halow::eth_tx(dst, net::EtherType::Arp, {(const u8*)&arp, sizeof(arp)}));
-            co_await print("arp request sent\n");
         } else if(elms[1] == "stat") {
             auto status = halow::YapsStatus();
             co_ensure(co_await halow::read_status(status));
@@ -410,11 +392,19 @@ auto handle_command(noxx::StringView line) -> coop::Async<bool> {
                 co_await coop::sleep_ms(1000);
             }
         } else if(elms[1] == "arp") {
-            for(auto& e : netstack.arp.entries.data) {
-                if(e.state == net::arp::State::Free) {
-                    continue;
+            if(elms.size() >= 3) {
+                // broadcast a who-has; the reply lands in the table
+                co_ensure(netstack.netif != nullptr, "run net up first");
+                co_unwrap(ip, net::parse_ip(elms[2]));
+                co_ensure(co_await net::arp::request(netstack, ip));
+                co_await print("arp request sent\n");
+            } else {
+                for(auto& e : netstack.arp.entries.data) {
+                    if(e.state == net::arp::State::Free) {
+                        continue;
+                    }
+                    co_ensure(co_await printf<"{} -> {} {}\n">(e.ip, e.mac, e.state == net::arp::State::Resolved ? "resolved" : "pending"));
                 }
-                co_ensure(co_await printf<"{} -> {} {}\n">(e.ip, e.mac, e.state == net::arp::State::Resolved ? "resolved" : "pending"));
             }
         } else {
             co_ensure(false, "usage: net <up|ip|ping|arp>");

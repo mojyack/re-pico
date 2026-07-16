@@ -68,6 +68,10 @@ auto build_request(MacAddrRef sender_mac, IPv4Addr sender_ip, IPv4Addr target_ip
 // requests for our ip and learns sender mappings, flushing pending packets
 auto input(Stack& stack, AutoPacket packet) -> coop::Async<void>;
 
+// broadcast a who-has for target_ip (uses stack.addr as the sender, 0.0.0.0
+// before one is configured). the reply is learned by input() into the table
+auto request(Stack& stack, IPv4Addr target_ip) -> coop::Async<bool>;
+
 // look up a resolved mac; nullopt if unknown or still pending
 auto lookup(Table& table, IPv4Addr ip) -> noxx::Optional<MacAddr>;
 

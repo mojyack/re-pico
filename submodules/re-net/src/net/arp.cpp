@@ -61,10 +61,11 @@ auto send(Stack& stack, const u16 op, MacAddrRef eth_dst, MacAddrRef arp_target_
     co_return co_await stack.eth_send(eth_dst, EtherType::Arp, noxx::move(packet));
 }
 
-auto send_request(Stack& stack, const IPv4Addr target_ip) -> coop::Async<bool> {
+} // namespace
+
+auto request(Stack& stack, const IPv4Addr target_ip) -> coop::Async<bool> {
     co_return co_await send(stack, Op::Request, broadcast, MacAddr{}, target_ip);
 }
-} // namespace
 
 auto build_request(const MacAddrRef sender_mac, const IPv4Addr sender_ip, const IPv4Addr target_ip) -> Packet {
     auto ret = Packet{
@@ -132,7 +133,7 @@ auto resolve_and_send(Stack& stack, const IPv4Addr next_hop, AutoPacket packet) 
     entry.deadline_ms  = stack.now_ms + retry_interval_ms;
     entry.last_used_ms = stack.now_ms;
     entry.pending      = noxx::move(packet);
-    co_return co_await send_request(stack, next_hop);
+    co_return co_await request(stack, next_hop);
 }
 
 auto input(Stack& stack, AutoPacket packet) -> coop::Async<void> {
@@ -169,7 +170,7 @@ auto tick(Stack& stack, const u64 now_ms) -> coop::Async<void> {
                 } else {
                     entry.retries += 1;
                     entry.deadline_ms = now_ms + retry_interval_ms;
-                    co_await send_request(stack, entry.ip);
+                    co_await request(stack, entry.ip);
                 }
             }
             break;
