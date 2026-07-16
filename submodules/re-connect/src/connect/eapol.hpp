@@ -1,17 +1,17 @@
 #pragma once
+#include <crypto/rng.hpp>
+#include <crypto/util.hpp>
 #include <noxx/array.hpp>
 #include <noxx/optional.hpp>
 #include <noxx/span.hpp>
 
 #include "dot1x.hpp"
 #include "mac-addr.hpp"
-#include "rng.hpp"
-#include "util.hpp"
 
 // RSN 4-way handshake supplicant for AKM SAE (00-0F-AC:8): PTK derivation,
 // EAPOL-Key MIC (AES-CMAC) and key-data unwrap (AES key wrap), and GTK/IGTK
 // extraction. Ref IEEE 802.11-2020 12.7 and hostap/src/rsn_supp/wpa.c.
-namespace crypto::eapol {
+namespace connect::eapol {
 bytes_alias(Nonce, sizeof(dot1x::KeyPacket::nonce));
 
 constexpr auto gtk_max = usize(32);
@@ -85,7 +85,7 @@ struct Supplicant {
     noxx::Span<const u8> rsn_ie; // our RSN IE, sent in M2
     MacAddrRef           aa;     // authenticator (AP) MAC
     MacAddrRef           spa;    // supplicant (our) MAC
-    Rng*                 rng;
+    crypto::Rng*         rng;
 
     // outputs
     Ptk       ptk;
@@ -104,4 +104,4 @@ struct Supplicant {
     // validation (bad MIC, replay, key unwrap).
     auto on_frame(noxx::Span<const u8> in, noxx::Span<u8> out) -> usize;
 };
-} // namespace crypto::eapol
+} // namespace connect::eapol

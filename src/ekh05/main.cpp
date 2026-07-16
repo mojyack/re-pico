@@ -3,8 +3,8 @@
 #include <coop/promise.hpp>
 #include <coop/task-handle.hpp>
 #include <coop/timer.hpp>
-#include <crypto/eapol.hpp>
-#include <crypto/sae.hpp>
+#include <connect/eapol.hpp>
+#include <connect/sae.hpp>
 #include <hal/rng.hpp>
 #include <hal/uart.hpp>
 #include <halow/command.hpp>
@@ -114,13 +114,13 @@ auto crypto_selftest() -> coop::Async<bool> {
     // SAE group-19 H2E handshake between a local STA and AP role
     const auto ssid     = noxx::StringView("halow-test");
     const auto password = noxx::StringView("password");
-    const auto pt       = crypto::sae::derive_pt(ssid, password);
-    const auto sta_mac  = crypto::MacAddr{0x0c, 0xbf, 0x74, 0x00, 0x00, 0x0a};
-    const auto ap_mac   = crypto::MacAddr{0x00, 0x60, 0xad, 0x80, 0x1f, 0x51};
+    const auto pt       = connect::sae::derive_pt(ssid, password);
+    const auto sta_mac  = connect::MacAddr{0x0c, 0xbf, 0x74, 0x00, 0x00, 0x0a};
+    const auto ap_mac   = connect::MacAddr{0x00, 0x60, 0xad, 0x80, 0x1f, 0x51};
 
     auto hw  = HwRng();
-    auto sta = crypto::sae::Session();
-    auto ap  = crypto::sae::Session();
+    auto sta = connect::sae::Session();
+    auto ap  = connect::sae::Session();
     co_ensure(sta.start(pt, sta_mac, ap_mac, hw), "sta sae start failed");
     co_ensure(ap.start(pt, ap_mac, sta_mac, hw), "ap sae start failed");
 
@@ -144,13 +144,13 @@ auto crypto_selftest() -> coop::Async<bool> {
     // EAPOL PTK derivation known-answer (independent Python oracle vector)
     constexpr auto kat_pmk = noxx::to_array<u8>({0xa4, 0x5d, 0xb8, 0xa0, 0xb3, 0x72, 0x5a, 0x6a, 0xc7, 0xe9, 0xfe, 0xde, 0xc3, 0x72, 0x1d, 0x1d,
                                                  0x59, 0x49, 0x98, 0xa1, 0x16, 0x74, 0x43, 0xc3, 0x2d, 0x8c, 0xa3, 0xed, 0xb8, 0xf4, 0x57, 0x53});
-    auto           anonce  = crypto::eapol::Nonce();
-    auto           snonce  = crypto::eapol::Nonce();
+    auto           anonce  = connect::eapol::Nonce();
+    auto           snonce  = connect::eapol::Nonce();
     for(auto i = usize(0); i < 32; i += 1) {
         anonce[i] = 0x1a;
         snonce[i] = 0x2b;
     }
-    auto           ptk     = crypto::eapol::derive_ptk(kat_pmk, ap_mac, sta_mac, anonce, snonce);
+    auto           ptk     = connect::eapol::derive_ptk(kat_pmk, ap_mac, sta_mac, anonce, snonce);
     constexpr auto kat_kck = noxx::to_array<u8>({0x76, 0x82, 0x1d, 0x26, 0x20, 0x03, 0x5e, 0xef, 0x71, 0xfa, 0x12, 0x49, 0x32, 0x39, 0x0a, 0x08});
     co_ensure(ptk.kck == kat_kck, "eapol ptk kat mismatch");
     co_await print("eapol ok: ptk derivation matches known-answer vector\n");

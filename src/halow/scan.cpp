@@ -1,6 +1,6 @@
 #include <coop/promise.hpp>
 #include <coop/timer.hpp>
-#include <crypto/ie.hpp>
+#include <connect/ie.hpp>
 #include <hal/time.hpp>
 #include <halow-fw-blob.hpp>
 #include <halow-regdb.hpp>
@@ -105,8 +105,8 @@ auto build_probe_request(noxx::BufWriter& w, const dot11::MacAddr& mac, const no
     }));
 
     // ssid ie, empty = wildcard
-    ensure(w.append_obj(crypto::ie::Header{
-        .id     = crypto::ie::Id::Ssid,
+    ensure(w.append_obj(connect::ie::Header{
+        .id     = connect::ie::Id::Ssid,
         .length = u8(ssid.size()),
     }));
     ensure(w.append_span(ssid));
@@ -190,16 +190,16 @@ auto process_mgmt_frame(const net::Packet& packet, const noxx::Span<ScanResult> 
 
     // pick the ssid and s1g operation ies
     while(r.size > 0) {
-        unwrap(ieh, r.read<crypto::ie::Header>());
+        unwrap(ieh, r.read<connect::ie::Header>());
         unwrap(body, r.read(ieh.length));
         switch(ieh.id) {
-        case crypto::ie::Id::Ssid:
+        case connect::ie::Id::Ssid:
             res.ssid_len = noxx::min<usize>(ieh.length, sizeof(res.ssid));
             noxx::memcpy(res.ssid, &body, res.ssid_len);
             break;
-        case crypto::ie::Id::S1gOperation:
-            ensure(sizeof(ieh) + ieh.length >= sizeof(crypto::ie::S1gOp));
-            res.s1g_op.emplace(*(const crypto::ie::S1gOp*)&ieh);
+        case connect::ie::Id::S1gOperation:
+            ensure(sizeof(ieh) + ieh.length >= sizeof(connect::ie::S1gOp));
+            res.s1g_op.emplace(*(const connect::ie::S1gOp*)&ieh);
             break;
         }
     }
@@ -207,22 +207,22 @@ auto process_mgmt_frame(const net::Packet& packet, const noxx::Span<ScanResult> 
 }
 } // namespace
 
-auto make_s1g_capabilities() -> crypto::ie::S1gCaps {
-    auto caps = crypto::ie::S1gCaps{
+auto make_s1g_capabilities() -> connect::ie::S1gCaps {
+    auto caps = connect::ie::S1gCaps{
         .header = {
-            .id     = crypto::ie::Id::S1gCapabilities,
-            .length = sizeof(crypto::ie::S1gCaps) - sizeof(crypto::ie::Header),
+            .id     = connect::ie::Id::S1gCapabilities,
+            .length = sizeof(connect::ie::S1gCaps) - sizeof(connect::ie::Header),
         },
     };
-    caps.s1g_capabilities_info[0] = crypto::ie::S1gCaps::Cap0::SuppWidth1248Mhz;
-    caps.s1g_capabilities_info[4] = crypto::ie::S1gCaps::Cap4::StaTypeNonSensor;
-    caps.s1g_capabilities_info[7] = crypto::ie::S1gCaps::Cap7::Dup1MhzSupport;
+    caps.s1g_capabilities_info[0] = connect::ie::S1gCaps::Cap0::SuppWidth1248Mhz;
+    caps.s1g_capabilities_info[4] = connect::ie::S1gCaps::Cap4::StaTypeNonSensor;
+    caps.s1g_capabilities_info[7] = connect::ie::S1gCaps::Cap7::Dup1MhzSupport;
     // mcs map: 1ss up to mcs 7, 2-4ss unsupported; stored once, then again
     // shifted across bytes 2-3 (rx/tx halves, as the reference builder does)
-    constexpr auto mcs_map = u8(crypto::ie::S1gNssMaxMcs::Mcs7 << 0 |
-                                crypto::ie::S1gNssMaxMcs::None << 2 |
-                                crypto::ie::S1gNssMaxMcs::None << 4 |
-                                crypto::ie::S1gNssMaxMcs::None << 6);
+    constexpr auto mcs_map = u8(connect::ie::S1gNssMaxMcs::Mcs7 << 0 |
+                                connect::ie::S1gNssMaxMcs::None << 2 |
+                                connect::ie::S1gNssMaxMcs::None << 4 |
+                                connect::ie::S1gNssMaxMcs::None << 6);
 
     caps.supported_s1g_mcs_and_nss_set[0] = mcs_map;
     caps.supported_s1g_mcs_and_nss_set[2] = u8(mcs_map << 1);

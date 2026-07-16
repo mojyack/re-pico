@@ -1,7 +1,7 @@
 #pragma once
 #include <noxx/int.hpp>
 
-namespace crypto::ie {
+namespace connect::ie {
 struct Id {
     enum : u8 {
         Ssid            = 0,
@@ -81,4 +81,4 @@ struct S1gOp {
     u8     basic_s1g_mcs_nss_set[2];
 } __attribute__((packed));
 static_assert(sizeof(S1gOp) == 8);
-} // namespace crypto::ie
+} // namespace connect::ie

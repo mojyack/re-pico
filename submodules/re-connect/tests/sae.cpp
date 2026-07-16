@@ -1,4 +1,4 @@
-#include "crypto/sae.hpp"
+#include "connect/sae.hpp"
 #include "crypto/sha256.hpp"
 #include "util.hpp"
 
@@ -7,7 +7,7 @@
 namespace {
 constexpr auto error_value = false;
 
-namespace sae = crypto::sae;
+namespace sae = connect::sae;
 
 // deterministic RNG: hands out scripted 32-byte scalars in order
 struct ScriptRng : crypto::Rng {

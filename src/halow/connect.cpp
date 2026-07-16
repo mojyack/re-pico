@@ -2,9 +2,9 @@
 #include <coop/runner.hpp>
 #include <coop/task-handle.hpp>
 #include <coop/timer.hpp>
-#include <crypto/eapol.hpp>
+#include <connect/eapol.hpp>
+#include <connect/sae.hpp>
 #include <crypto/rng.hpp>
-#include <crypto/sae.hpp>
 #include <hal/rng.hpp>
 #include <hal/time.hpp>
 #include <noxx/array.hpp>
@@ -71,7 +71,7 @@ struct HwRng : crypto::Rng {
 auto hw_rng = HwRng();
 
 // PMK handed from the SAE exchange to the 4-way handshake within one connect()
-auto sae_pmk = crypto::sae::PMK();
+auto sae_pmk = connect::sae::PMK();
 
 // primary channel width and rate for the current link, from the s1g operation ie
 auto prim_bw_mhz = u8(1);
@@ -191,7 +191,7 @@ auto set_sta_state(const u16 state, const u16 aid) -> coop::Async<bool> {
 }
 
 // SET_CHANNEL + SET_TXPOWER from the ap's s1g operation ie
-auto configure_channel(const crypto::ie::S1gOp& s1g_op) -> coop::Async<bool> {
+auto configure_channel(const connect::ie::S1gOp& s1g_op) -> coop::Async<bool> {
     constexpr auto error_value = false;
 
     const auto regdom = find_regdom();
@@ -210,14 +210,14 @@ auto configure_channel(const crypto::ie::S1gOp& s1g_op) -> coop::Async<bool> {
     co_ensure(op_chan != nullptr && pri_chan != nullptr, "ap channel not in regdom");
 
     const auto width  = s1g_op.channel_width;
-    const auto op_bw  = FB(crypto::ie::S1gOp::ChanWidth::OpWidth, width) + 1;
-    const auto pri_bw = FB(crypto::ie::S1gOp::ChanWidth::PrimIs1Mhz, width) ? 1 : 2;
+    const auto op_bw  = FB(connect::ie::S1gOp::ChanWidth::OpWidth, width) + 1;
+    const auto pri_bw = FB(connect::ie::S1gOp::ChanWidth::PrimIs1Mhz, width) ? 1 : 2;
     co_ensure(op_bw == op_chan->bw_mhz, "op width mismatch with regdom");
 
     // index of the primary 1MHz subchannel within the operating channel
     // (ref umac_interface_calc_pri_1mhz_idx)
     auto pri_idx = (i32(pri_chan->freq_khz) - i32(op_chan->freq_khz) + i32(op_bw - pri_bw) * 500) / 1000;
-    if(pri_bw == 2 && (width & crypto::ie::S1gOp::ChanWidth::PrimLoc)) {
+    if(pri_bw == 2 && (width & connect::ie::S1gOp::ChanWidth::PrimLoc)) {
         pri_idx += 1;
     }
     co_ensure(pri_idx >= 0 && pri_idx < op_bw, "invalid primary channel index");
@@ -349,8 +349,8 @@ auto wait_sae_auth(const u16 seq_num, u16& status_code) -> coop::Async<noxx::Opt
 auto sae_authenticate(const noxx::StringView ssid, const noxx::StringView password) -> coop::Async<bool> {
     constexpr auto error_value = false;
 
-    const auto pt      = crypto::sae::derive_pt(ssid, password);
-    auto       session = crypto::sae::Session();
+    const auto pt      = connect::sae::derive_pt(ssid, password);
+    auto       session = connect::sae::Session();
     co_ensure(session.start(pt, link.mac, link.bssid, hw_rng), "sae start failed");
 
     auto commit     = noxx::Array<u8, 200>();
@@ -360,7 +360,7 @@ auto sae_authenticate(const noxx::StringView ssid, const noxx::StringView passwo
     // commit exchange, retrying on timeout and on an anti-clogging token request
     auto got_commit = false;
     for(auto attempt = u32(0); attempt < auth_tries && !got_commit; attempt += 1) {
-        co_ensure(co_await tx_sae_auth(1, crypto::sae::status_hash_to_element, {commit.data, commit_len}));
+        co_ensure(co_await tx_sae_auth(1, connect::sae::status_hash_to_element, {commit.data, commit_len}));
 
         auto status  = u16(0);
         auto payload = co_await wait_sae_auth(1, status);
@@ -368,7 +368,7 @@ auto sae_authenticate(const noxx::StringView ssid, const noxx::StringView passwo
             log<"halow: sae commit timeout, retrying\n">();
             continue;
         }
-        if(status == crypto::sae::status_anti_clogging) {
+        if(status == connect::sae::status_anti_clogging) {
             // body is group(le16) followed by the anti-clogging token
             co_ensure(payload->size() > 2, "empty anti-clogging token");
             commit_len = session.write_commit(commit, noxx::Span(*payload).subspan(2));
@@ -376,7 +376,7 @@ auto sae_authenticate(const noxx::StringView ssid, const noxx::StringView passwo
             log<"halow: sae anti-clogging token, resending commit\n">();
             continue;
         }
-        co_ensure(status == crypto::sae::status_hash_to_element || status == dot11::status_success, "sae commit refused");
+        co_ensure(status == connect::sae::status_hash_to_element || status == dot11::status_success, "sae commit refused");
         co_ensure(session.read_commit(*payload), "sae read_commit failed");
         got_commit = true;
     }
@@ -428,7 +428,7 @@ auto four_way_handshake() -> coop::Async<bool> {
     noxx::memcpy(rsn_buf.data, rsn_ie.data, rsn_ie.size());
     noxx::memcpy(rsn_buf.data + rsn_ie.size(), rsnxe.data, rsnxe.size());
 
-    auto supp   = crypto::eapol::Supplicant();
+    auto supp   = connect::eapol::Supplicant();
     supp.pmk    = {sae_pmk.data, sae_pmk.size()};
     supp.rsn_ie = {rsn_buf.data, rsn_buf.size()};
     supp.aa     = link.bssid;
@@ -498,13 +498,13 @@ auto associate(const noxx::StringView ssid, const bool secure) -> coop::Async<bo
         .capability      = assoc_capability,
         .listen_interval = 0,
     }));
-    co_ensure(w.append_obj(crypto::ie::Header{
-        .id     = crypto::ie::Id::Ssid,
+    co_ensure(w.append_obj(connect::ie::Header{
+        .id     = connect::ie::Id::Ssid,
         .length = u8(ssid.size()),
     }));
     co_ensure(w.append_span(ssid));
-    co_ensure(w.append_obj(crypto::ie::Header{
-        .id     = crypto::ie::Id::AidRequest,
+    co_ensure(w.append_obj(connect::ie::Header{
+        .id     = connect::ie::Id::AidRequest,
         .length = 1,
     }));
     co_ensure(w.append_obj(u8(0))); // aid mode
@@ -520,12 +520,12 @@ auto associate(const noxx::StringView ssid, const bool secure) -> coop::Async<bo
     }
     // wmm information element (ref ie_wmm_info_build)
     constexpr auto wmm_info = noxx::to_array<u8>({0x00, 0x50, 0xf2, 0x02, 0x00, 0x01, 0x00});
-    co_ensure(w.append_obj(crypto::ie::Header{
-        .id     = crypto::ie::Id::VendorSpecific,
+    co_ensure(w.append_obj(connect::ie::Header{
+        .id     = connect::ie::Id::VendorSpecific,
         .length = 0,
     }));
-    co_ensure(w.append_obj(crypto::ie::Header{
-        .id     = crypto::ie::Id::VendorSpecific,
+    co_ensure(w.append_obj(connect::ie::Header{
+        .id     = connect::ie::Id::VendorSpecific,
         .length = u8(sizeof(wmm_info)),
     }));
     co_ensure(w.append_obj(wmm_info));
@@ -544,10 +544,10 @@ auto associate(const noxx::StringView ssid, const bool secure) -> coop::Async<bo
         r.size -= dot11::fcs_len;
     }
     while(r.size > 0 && aid == 0) {
-        co_unwrap(ieh, r.read<crypto::ie::Header>());
+        co_unwrap(ieh, r.read<connect::ie::Header>());
         co_unwrap(body, r.read_span(ieh.length));
         switch(ieh.id) {
-        case crypto::ie::Id::AidResponse:
+        case connect::ie::Id::AidResponse:
             co_ensure(body.size() >= sizeof(aid));
             aid = *(uu16*)body.data;
             break;

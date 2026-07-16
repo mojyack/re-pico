@@ -1,3 +1,6 @@
+#include <crypto/aes-cmac.hpp>
+#include <crypto/aes-keywrap.hpp>
+#include <crypto/kdf.hpp>
 #include <noxx/array.hpp>
 #include <noxx/bits.hpp>
 #include <noxx/buf-reader.hpp>
@@ -6,16 +9,13 @@
 #include <noxx/endian.hpp>
 #include <noxx/platform.hpp>
 
-#include "aes-cmac.hpp"
-#include "aes-keywrap.hpp"
 #include "dot1x.hpp"
-#include "ie.hpp"
 #include "eapol.hpp"
-#include "kdf.hpp"
+#include "ie.hpp"
 
 #include <noxx/assert.hpp>
 
-namespace crypto::eapol {
+namespace connect::eapol {
 namespace {
 constexpr auto error_value = usize(0);
 
@@ -58,13 +58,13 @@ auto parse_key_data(const noxx::Span<const u8> kd, GroupKeys& out) -> bool {
     return out.gtk.len != 0;
 }
 
-auto build_reply(const noxx::Span<u8>       out,
-                 const u8                   version,
-                 const u16                  key_info,
-                 const u64                  replay,
-                 const NonceRef             nonce,
-                 const noxx::Span<const u8> key_data,
-                 const Aes128::KeyRef       kck) -> usize {
+auto build_reply(const noxx::Span<u8>         out,
+                 const u8                     version,
+                 const u16                    key_info,
+                 const u64                    replay,
+                 const NonceRef               nonce,
+                 const noxx::Span<const u8>   key_data,
+                 const crypto::Aes128::KeyRef kck) -> usize {
     auto w = noxx::BufWriter::from_span(out);
     unwrap(header, w.alloc_obj<dot1x::Header>());
     unwrap(kp, w.alloc_obj<dot1x::KeyPacket>());
@@ -91,7 +91,7 @@ auto build_reply(const noxx::Span<u8>       out,
         noxx::memcpy(&kd, key_data.data, key_data.size());
     }
 
-    aes_cmac(Aes128(kck), {out.data, w.data - out.data}, Aes128::BlockMutRef(kp.mic));
+    crypto::aes_cmac(crypto::Aes128(kck), {out.data, w.data - out.data}, crypto::Aes128::BlockMutRef(kp.mic));
 
     return w.data - out.data;
 }
@@ -115,7 +115,7 @@ auto derive_ptk(const noxx::Span<const u8> pmk, const MacAddrRef aa, const MacAd
 
     auto           ret   = Ptk();
     constexpr auto label = noxx::comptime::String("Pairwise key expansion");
-    sha256_prf(pmk, {(const u8*)label.data, label.size()}, data, noxx::Span<u8>{(u8*)&ret, sizeof(ret)});
+    crypto::sha256_prf(pmk, {(const u8*)label.data, label.size()}, data, noxx::Span<u8>{(u8*)&ret, sizeof(ret)});
     return ret;
 }
 
@@ -159,14 +159,14 @@ auto Supplicant::on_frame(const noxx::Span<const u8> in, const noxx::Span<u8> ou
     noxx::memset((u8*)kp.mic, 0, sizeof(kp.mic)); //  FIXME: this overwriting const u8
     // - compute mac
     auto got_mic = noxx::Array<u8, sizeof(dot1x::KeyPacket::mic)>();
-    aes_cmac(Aes128(ptk.kck), {in.data, r.data - in.data}, got_mic);
+    crypto::aes_cmac(crypto::Aes128(ptk.kck), {in.data, r.data - in.data}, got_mic);
     // - compare them
     ensure(orig_mic == got_mic, "m3 mic mismatch");
 
     // decrypt (AES key unwrap) the key data with the KEK
     ensure(kd.size() >= 24 && kd.size() % 8 == 0, "bad m3 key data length");
     auto plain = noxx::Array<u8, 512>();
-    ensure(aes_key_unwrap(Aes128(ptk.kek), kd, plain.data), "m3 key unwrap failed");
+    ensure(crypto::aes_key_unwrap(crypto::Aes128(ptk.kek), kd, plain.data), "m3 key unwrap failed");
     ensure(parse_key_data({plain.data, kd.size() - 8}, group), "no gtk in m3");
 
     replay                = noxx::byteswap(kp.replay);
@@ -179,4 +179,4 @@ auto Supplicant::on_frame(const noxx::Span<const u8> in, const noxx::Span<u8> ou
     complete     = n != 0;
     return n;
 }
-} // namespace crypto::eapol
+} // namespace connect::eapol

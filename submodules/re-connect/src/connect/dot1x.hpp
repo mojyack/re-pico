@@ -1,7 +1,7 @@
 #pragma once
 #include <noxx/int.hpp>
 
-namespace crypto::dot1x {
+namespace connect::dot1x {
 struct Header {
     struct Type {
         enum : u8 {
@@ -71,4 +71,4 @@ struct KeyPacket {
     u8  mic[16];
     u16 datalen;
 } __attribute__((packed));
-} // namespace crypto::dot1x
+} // namespace connect::dot1x

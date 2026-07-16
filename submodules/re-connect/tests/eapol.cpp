@@ -4,11 +4,11 @@
 #include <noxx/buf-writer.hpp>
 #include <noxx/endian.hpp>
 
+#include "connect/dot1x.hpp"
+#include "connect/eapol.hpp"
+#include "connect/ie.hpp"
 #include "crypto/aes-cmac.hpp"
 #include "crypto/aes-keywrap.hpp"
-#include "crypto/dot1x.hpp"
-#include "crypto/eapol.hpp"
-#include "crypto/ie.hpp"
 #include "util.hpp"
 
 #include <noxx/assert.hpp>
@@ -16,7 +16,7 @@
 namespace {
 constexpr auto error_value = false;
 
-namespace eapol = crypto::eapol;
+namespace eapol = connect::eapol;
 
 // a deterministic RNG that always returns the scripted SNonce
 struct FixedRng : crypto::Rng {
@@ -30,28 +30,28 @@ struct FixedRng : crypto::Rng {
     }
 };
 
-const auto aa  = crypto::MacAddr{0x00, 0x60, 0xad, 0x80, 0x1f, 0x51};
-const auto spa = crypto::MacAddr{0x0c, 0xbf, 0x74, 0x00, 0x00, 0x0a};
+const auto aa  = connect::MacAddr{0x00, 0x60, 0xad, 0x80, 0x1f, 0x51};
+const auto spa = connect::MacAddr{0x0c, 0xbf, 0x74, 0x00, 0x00, 0x0a};
 
 // build a raw EAPOL-Key frame; key_data is already plaintext-or-wrapped bytes
 auto build_frame(const noxx::Span<u8>          out,
                  const u16                     key_info,
                  const u64                     replay,
-                 const crypto::eapol::NonceRef nonce,
+                 const connect::eapol::NonceRef nonce,
                  const noxx::Span<const u8>    key_data,
                  const crypto::Aes128::Key*    kck_for_mic) -> usize {
     auto w = noxx::BufWriter::from_span(out);
-    unwrap(header, w.alloc_obj<crypto::dot1x::Header>());
-    unwrap(kp, w.alloc_obj<crypto::dot1x::KeyPacket>());
+    unwrap(header, w.alloc_obj<connect::dot1x::Header>());
+    unwrap(kp, w.alloc_obj<connect::dot1x::KeyPacket>());
     unwrap(kd, w.alloc(key_data.size()));
 
     header = {
         .version = 2,
-        .type    = crypto::dot1x::Header::Type::Key,
+        .type    = connect::dot1x::Header::Type::Key,
         .length  = noxx::byteswap(u16(key_data.size())),
     };
     kp = {
-        .type    = crypto::dot1x::KeyPacket::Type::RSN,
+        .type    = connect::dot1x::KeyPacket::Type::RSN,
         .info    = noxx::byteswap(key_info),
         .keysize = noxx::byteswap(u16(16)), // CCMP
         .replay  = noxx::byteswap(replay),
@@ -69,34 +69,34 @@ auto build_frame(const noxx::Span<u8>          out,
 auto append_gtk_kde(noxx::BufWriter& w, const u8 type, const u16 id_byte, const noxx::Span<const u8> key) -> void {
     const auto orig = w.data;
 
-    w.append_obj(u8(crypto::ie::Id::VendorSpecific));
+    w.append_obj(u8(connect::ie::Id::VendorSpecific));
     auto& len = *w.alloc_obj<u8>(); // later
-    w.append_obj(crypto::eapol::kde::rsn_oui);
+    w.append_obj(connect::eapol::kde::rsn_oui);
     w.append_obj(type);
     switch(type) {
-    case crypto::eapol::kde::Type::Gtk:
+    case connect::eapol::kde::Type::Gtk:
         w.append_obj(u8(id_byte));
         w.append_obj(u8(0));
         w.append_span(key);
         break;
-    case crypto::eapol::kde::Type::Igtk:
+    case connect::eapol::kde::Type::Igtk:
         w.append_obj(id_byte);
-        w.append_obj(crypto::eapol::Igtk::IPN());
+        w.append_obj(connect::eapol::Igtk::IPN());
         w.append_span(key);
         break;
     }
     len = w.data - orig - 2 /* exclude id and len */;
 }
 
-auto verify_mic(const noxx::Span<const u8> m, const crypto::eapol::Ptk::KCK& kck) -> bool {
+auto verify_mic(const noxx::Span<const u8> m, const connect::eapol::Ptk::KCK& kck) -> bool {
     auto r = noxx::BufReader::from_span(m);
-    unwrap(header, r.read<crypto::dot1x::Header>());
+    unwrap(header, r.read<connect::dot1x::Header>());
     (void)header;
-    unwrap(kp, r.read<crypto::dot1x::KeyPacket>());
-    auto orig_mic = noxx::Array<u8, sizeof(crypto::dot1x::KeyPacket::mic)>();
+    unwrap(kp, r.read<connect::dot1x::KeyPacket>());
+    auto orig_mic = noxx::Array<u8, sizeof(connect::dot1x::KeyPacket::mic)>();
     noxx::memcpy(orig_mic.data, kp.mic, sizeof(kp.mic));
     noxx::memset((u8*)kp.mic, 0, sizeof(kp.mic)); // FIXME: this overwriting const u8
-    auto got_mic = noxx::Array<u8, sizeof(crypto::dot1x::KeyPacket::mic)>();
+    auto got_mic = noxx::Array<u8, sizeof(connect::dot1x::KeyPacket::mic)>();
     crypto::aes_cmac(crypto::Aes128(kck), m, got_mic);
     ensure(orig_mic == got_mic, "MIC invalid");
     return true;
@@ -107,9 +107,9 @@ auto verify_mic(const noxx::Span<const u8> m, const crypto::eapol::Ptk::KCK& kck
 auto full_handshake() -> bool {
     auto pmk_arr = noxx::Array<u8, 32>();
     ensure(test::from_hex("a45db8a0b3725a6ac7e9fedec3721d1d594998a1167443c32d8ca3edb8f45753", pmk_arr) == 32);
-    auto anonce = crypto::eapol::Nonce();
-    auto snonce = crypto::eapol::Nonce();
-    for(auto i = 0uz; i < crypto::eapol::Nonce::size(); i += 1) {
+    auto anonce = connect::eapol::Nonce();
+    auto snonce = connect::eapol::Nonce();
+    for(auto i = 0uz; i < connect::eapol::Nonce::size(); i += 1) {
         anonce[i] = 0x1a;
         snonce[i] = 0x2b;
     }
@@ -131,8 +131,8 @@ auto full_handshake() -> bool {
 
     // --- M1: ANonce, no MIC ---
     auto       m1     = noxx::Array<u8, 256>();
-    const auto ki_m1  = BF(crypto::dot1x::KeyPacket::Info::KeyType, crypto::dot1x::KeyPacket::KeyType::Pairwise) |
-                        crypto::dot1x::KeyPacket::Info::Ack;
+    const auto ki_m1  = BF(connect::dot1x::KeyPacket::Info::KeyType, connect::dot1x::KeyPacket::KeyType::Pairwise) |
+                        connect::dot1x::KeyPacket::Info::Ack;
     const auto m1_len = build_frame(m1, ki_m1, 0x01, anonce, {}, nullptr);
 
     auto       m2     = noxx::Array<u8, 256>();
@@ -167,12 +167,12 @@ auto full_handshake() -> bool {
     ensure(crypto::aes_key_wrap(crypto::Aes128(auth_ptk.kek), {kd.data, kd_len}, wrapped.data));
 
     auto       m3     = noxx::Array<u8, 256>();
-    const auto ki_m3  = BF(crypto::dot1x::KeyPacket::Info::KeyType, crypto::dot1x::KeyPacket::KeyType::Pairwise) |
-                        crypto::dot1x::KeyPacket::Info::Install |
-                        crypto::dot1x::KeyPacket::Info::Ack |
-                        crypto::dot1x::KeyPacket::Info::Mic |
-                        crypto::dot1x::KeyPacket::Info::Secure |
-                        crypto::dot1x::KeyPacket::Info::EncrKeyData;
+    const auto ki_m3  = BF(connect::dot1x::KeyPacket::Info::KeyType, connect::dot1x::KeyPacket::KeyType::Pairwise) |
+                        connect::dot1x::KeyPacket::Info::Install |
+                        connect::dot1x::KeyPacket::Info::Ack |
+                        connect::dot1x::KeyPacket::Info::Mic |
+                        connect::dot1x::KeyPacket::Info::Secure |
+                        connect::dot1x::KeyPacket::Info::EncrKeyData;
     const auto m3_len = build_frame(m3, ki_m3, 0x02, anonce, {wrapped.data, kd_len + 8}, &auth_ptk.kck);
 
     auto       m4     = noxx::Array<u8, 256>();
@@ -197,9 +197,9 @@ auto full_handshake() -> bool {
 auto bad_mic_rejected() -> bool {
     auto pmk_arr = noxx::Array<u8, 32>();
     ensure(test::from_hex("a45db8a0b3725a6ac7e9fedec3721d1d594998a1167443c32d8ca3edb8f45753", pmk_arr) == 32);
-    auto anonce = crypto::eapol::Nonce();
-    auto snonce = crypto::eapol::Nonce();
-    for(auto i = 0uz; i < crypto::eapol::Nonce::size(); i += 1) {
+    auto anonce = connect::eapol::Nonce();
+    auto snonce = connect::eapol::Nonce();
+    for(auto i = 0uz; i < connect::eapol::Nonce::size(); i += 1) {
         anonce[i] = 0x1a;
         snonce[i] = 0x2b;
     }
@@ -218,8 +218,8 @@ auto bad_mic_rejected() -> bool {
 
     auto       m1     = noxx::Array<u8, 256>();
     auto       m2     = noxx::Array<u8, 256>();
-    const auto ki     = BF(crypto::dot1x::KeyPacket::Info::KeyType, crypto::dot1x::KeyPacket::KeyType::Pairwise) |
-                        crypto::dot1x::KeyPacket::Info::Ack;
+    const auto ki     = BF(connect::dot1x::KeyPacket::Info::KeyType, connect::dot1x::KeyPacket::KeyType::Pairwise) |
+                        connect::dot1x::KeyPacket::Info::Ack;
     const auto m1_len = build_frame(m1, ki, 0x01, anonce, {}, nullptr);
     ensure(sta.on_frame({m1.data, m1_len}, m2) != 0);
 
@@ -237,15 +237,15 @@ auto bad_mic_rejected() -> bool {
     auto       wrapped = noxx::Array<u8, 160>();
     ensure(crypto::aes_key_wrap(crypto::Aes128(auth_ptk.kek), {kd.data, kd_len}, wrapped.data));
     auto       m3     = noxx::Array<u8, 256>();
-    const auto ki_m3  = BF(crypto::dot1x::KeyPacket::Info::KeyType, crypto::dot1x::KeyPacket::KeyType::Pairwise) |
-                        crypto::dot1x::KeyPacket::Info::Install |
-                        crypto::dot1x::KeyPacket::Info::Ack |
-                        crypto::dot1x::KeyPacket::Info::Mic |
-                        crypto::dot1x::KeyPacket::Info::Secure |
-                        crypto::dot1x::KeyPacket::Info::EncrKeyData;
+    const auto ki_m3  = BF(connect::dot1x::KeyPacket::Info::KeyType, connect::dot1x::KeyPacket::KeyType::Pairwise) |
+                        connect::dot1x::KeyPacket::Info::Install |
+                        connect::dot1x::KeyPacket::Info::Ack |
+                        connect::dot1x::KeyPacket::Info::Mic |
+                        connect::dot1x::KeyPacket::Info::Secure |
+                        connect::dot1x::KeyPacket::Info::EncrKeyData;
     const auto m3_len = build_frame(m3, ki_m3, 0x02, anonce, {wrapped.data, kd_len + 8}, &auth_ptk.kck);
 
-    ((crypto::dot1x::KeyPacket*)&m3[sizeof(crypto::dot1x::Header)])->mic[0] ^= 0x01; // corrupt the MIC
+    ((connect::dot1x::KeyPacket*)&m3[sizeof(connect::dot1x::Header)])->mic[0] ^= 0x01; // corrupt the MIC
 
     auto m4 = noxx::Array<u8, 256>();
     ensure(sta.on_frame({m3.data, m3_len}, m4) == 0, "tampered M3 must be rejected");

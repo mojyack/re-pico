@@ -1,5 +1,5 @@
 project(
-    're-crypt',
+    're-connect',
     'cpp',
     version: '1.0.0',
     default_options: ['warning_level=3', 'werror=false', 'cpp_std=c++23'],
@@ -23,27 +23,28 @@ crypto_files = files(
     'src/crypto/sha256.cpp',
 )
 
-crypto_lib = static_library(
-    're-crypto',
-    crypto_files,
+connect_files = files(
+    'src/connect/eapol.cpp',
+    'src/connect/sae.cpp',
+)
+
+connect_lib = static_library(
+    're-connect',
+    crypto_files + connect_files,
     include_directories: inc,
 )
 
 support_files = files('tests/noxx-support.cpp')
 
 foreach name : [
-    'sha256',
-    'hmac-sha256',
-    'aes',
-    'aes-cmac',
-    'aes-keywrap',
-    'p256',
+    'sae',
+    'eapol',
 ]
     exe = executable(
         name + '-test',
         files('tests/' + name + '.cpp') + support_files,
         include_directories: inc,
-        link_with: crypto_lib,
+        link_with: connect_lib,
     )
     test(name, exe)
 endforeach

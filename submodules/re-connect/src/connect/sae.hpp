@@ -1,15 +1,15 @@
 #pragma once
+#include <crypto/p256.hpp>
+#include <crypto/rng.hpp>
 #include <noxx/span.hpp>
 
 #include "mac-addr.hpp"
-#include "p256.hpp"
-#include "rng.hpp"
 
 // SAE (Simultaneous Authentication of Equals) for WPA3, group 19 (P-256),
 // hash-to-element PWE only (sae_pwe=1). Ref IEEE 802.11-2020 12.4 and
 // hostap/src/common/sae.c. The caller (halow) wraps these payloads in 802.11
 // authentication frames and drives the commit/confirm exchange.
-namespace crypto::sae {
+namespace connect::sae {
 constexpr auto group_id    = u16(19);
 constexpr auto scalar_len  = usize(32);
 constexpr auto element_len = usize(64); // x || y
@@ -26,7 +26,7 @@ constexpr auto status_anti_clogging   = u16(76);
 // Password token: PT = SSWU(u1) + SSWU(u2), fixed per (ssid, password) and
 // reusable across connections. Derived once, off the connect hot path.
 struct Pt {
-    p256::Point point;
+    crypto::p256::Point point;
 };
 
 auto derive_pt(noxx::Span<const u8> ssid, noxx::Span<const u8> password) -> Pt;
@@ -34,21 +34,21 @@ auto derive_pt(noxx::Span<const u8> ssid, noxx::Span<const u8> password) -> Pt;
 // One SAE handshake against one peer. Not copyable once started (holds the
 // secret scalar). Reset by calling start() again.
 struct Session {
-    p256::Point pwe;  // val * PT
-    Bn256       rand; // secret
-    Bn256       own_scalar;
-    p256::Point own_element; // -(mask * PWE)
-    Bn256       peer_scalar;
-    p256::Point peer_element;
-    KCK         kck;
-    PMK         pmk;
-    PMKID       pmkid;
-    u16         send_confirm = 0;
-    bool        committed    = false;
-    bool        have_keys    = false;
+    crypto::p256::Point pwe;  // val * PT
+    crypto::Bn256       rand; // secret
+    crypto::Bn256       own_scalar;
+    crypto::p256::Point own_element; // -(mask * PWE)
+    crypto::Bn256       peer_scalar;
+    crypto::p256::Point peer_element;
+    KCK                 kck;
+    PMK                 pmk;
+    PMKID               pmkid;
+    u16                 send_confirm = 0;
+    bool                committed    = false;
+    bool                have_keys    = false;
 
     // derive PWE from PT and the two MACs, then pick a random commit scalar/element.
-    auto start(const Pt& pt, MacAddrRef own_mac, MacAddrRef peer_mac, Rng& rng) -> bool;
+    auto start(const Pt& pt, MacAddrRef own_mac, MacAddrRef peer_mac, crypto::Rng& rng) -> bool;
 
     // append the SAE commit payload: group(le16) | scalar(32) | element(64),
     // followed by an optional anti-clogging token container (H2E). returns the
@@ -66,4 +66,4 @@ struct Session {
     // verify the peer's confirm payload (send-confirm | confirm)
     auto verify_confirm(noxx::Span<const u8> payload) const -> bool;
 };
-} // namespace crypto::sae
+} // namespace connect::sae
