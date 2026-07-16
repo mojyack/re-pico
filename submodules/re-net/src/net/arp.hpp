@@ -1,4 +1,5 @@
 #pragma once
+#include <coop/promise.hpp>
 #include <net/ip.hpp>
 #include <net/mac-addr.hpp>
 #include <net/packet.hpp>
@@ -65,18 +66,18 @@ auto build_request(MacAddrRef sender_mac, IPv4Addr sender_ip, IPv4Addr target_ip
 
 // handle a received arp packet (eth header already consumed); replies to
 // requests for our ip and learns sender mappings, flushing pending packets
-auto input(Stack& stack, AutoPacket packet) -> void;
+auto input(Stack& stack, AutoPacket packet) -> coop::Async<void>;
 
 // look up a resolved mac; nullopt if unknown or still pending
 auto lookup(Table& table, IPv4Addr ip) -> noxx::Optional<MacAddr>;
 
-// resolve next_hop and send the ipv4 packet; queues it and requests the mac if
+// resolve next_hop and send the ipv4 packet; holds it and requests the mac if
 // not yet known (one packet held per entry, replacing any prior)
-auto resolve_and_send(Stack& stack, IPv4Addr next_hop, AutoPacket packet) -> bool;
+auto resolve_and_send(Stack& stack, IPv4Addr next_hop, AutoPacket packet) -> coop::Async<bool>;
 
 // learn a mapping (e.g. from an inbound ipv4 frame's ethernet source)
-auto cache(Stack& stack, IPv4Addr ip, MacAddrRef mac) -> void;
+auto cache(Stack& stack, IPv4Addr ip, MacAddrRef mac) -> coop::Async<void>;
 
 // re-request pending entries and age out resolved ones
-auto tick(Stack& stack, u64 now_ms) -> void;
+auto tick(Stack& stack, u64 now_ms) -> coop::Async<void>;
 } // namespace net::arp

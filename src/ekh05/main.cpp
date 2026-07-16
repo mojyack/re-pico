@@ -12,11 +12,15 @@
 #include <halow/firmware.hpp>
 #include <halow/halow.hpp>
 #include <halow/host-table.hpp>
+#include <halow/netif.hpp>
 #include <halow/scan.hpp>
 #include <halow/yaps.hpp>
 #include <net/arp.hpp>
 #include <net/ethernet.hpp>
+#include <net/icmp.hpp>
+#include <net/ip.hpp>
 #include <net/packet.hpp>
+#include <net/stack.hpp>
 #include <noxx/bits.hpp>
 #include <noxx/charconv.hpp>
 #include <noxx/format.hpp>
@@ -82,6 +86,12 @@ auto dump_task_tree(const coop::Task& task, const int indent = 0) -> void {
 }
 
 auto halow_host_table = noxx::Optional<halow::HostTable>();
+auto netstack         = net::Stack();
+
+// icmp echo reply sink for `net ping`; runs in link_task context, so blocking i/o
+auto on_ping_reply(net::Stack& /*self*/, const net::IPv4Addr src, const u16 /*id*/, const u16 seq, const noxx::Span<const u8> data) -> void {
+    printf_blocking<"ping reply from {}: seq={} {} bytes\n">(src, seq, data.size());
+}
 
 auto hexdump(const u8* const data, const usize size) -> coop::Async<bool> {
     constexpr auto error_value = false;
@@ -174,9 +184,13 @@ constexpr auto help = R"(commands:
     halow disconnect                 deauthenticate and tear the link down
     halow link                       print link status
     halow keepalive                  send a qos-null keepalive to the ap
-    halow dump [sec]                 dump received ethernet frames
     halow arp <ipv4>                 broadcast an arp request over the link
     halow saetest                    run the WPA3 SAE/EAPOL crypto self-test
+  net ...           network utilities
+    net up                           bring the ip stack up over the halow link
+    net ip <addr> [mask [gw]]        configure the ip address
+    net ping <addr> [count]          send icmp echo requests
+    net arp                          print the arp table
   mac               print halow mac address
   version           print dbgmcu versions
   ps                print process tree
@@ -281,10 +295,7 @@ auto handle_command(noxx::StringView line) -> coop::Async<bool> {
             co_unwrap(count, co_await halow::scan((*halow_host_table).mac, ssid, results));
             for(auto i = usize(0); i < count; i += 1) {
                 const auto& res = results[i];
-                co_ensure(co_await printf<"{02x}:{02x}:{02x}:{02x}:{02x}:{02x} rssi {} freq {}00khz bcnint {} '{}'\n">(
-                    res.bssid[0], res.bssid[1], res.bssid[2], res.bssid[3], res.bssid[4], res.bssid[5],
-                    res.rssi, res.freq_100khz, res.beacon_interval,
-                    noxx::StringView((const char*)res.ssid, res.ssid_len)));
+                co_ensure(co_await printf<"{} rssi {} freq {}00khz bcnint {} '{}'\n">(res.bssid, res.rssi, res.freq_100khz, res.beacon_interval, noxx::StringView((const char*)res.ssid, res.ssid_len)));
             }
             co_ensure(co_await printf<"{} access points found\n">(count));
         } else if(elms[1] == "connect") {
@@ -293,41 +304,10 @@ auto handle_command(noxx::StringView line) -> coop::Async<bool> {
             const auto password = elms.size() >= 4 ? elms[3] : noxx::StringView();
             co_ensure(co_await halow::connect((*halow_host_table).mac, elms[2], password));
             const auto& link = halow::link_status();
-            co_ensure(co_await printf<"connected to {02x}:{02x}:{02x}:{02x}:{02x}:{02x} aid {} on {}khz\n">(
-                link.bssid[0], link.bssid[1], link.bssid[2], link.bssid[3], link.bssid[4], link.bssid[5],
-                link.aid, link.freq_khz));
+            co_ensure(co_await printf<"connected to {} aid {} on {}khz\n">(link.bssid, link.aid, link.freq_khz));
         } else if(elms[1] == "disconnect") {
             co_ensure(co_await halow::disconnect());
             co_await print("disconnected\n");
-        } else if(elms[1] == "dump") {
-            co_ensure(halow::link_status().up, "not connected");
-            auto seconds = u32(10);
-            if(elms.size() >= 3) {
-                co_unwrap(v, noxx::from_chars<u32>(elms[2]));
-                seconds = v;
-            }
-            co_ensure(co_await printf<"dumping rx ethernet frames for {}s\n">(seconds));
-            const auto deadline = time::now() + u64(seconds) * 1'000'000;
-            auto       shown    = u32(0);
-            // the link maintenance task owns the raw stream and decodes frames
-            while(time::now() < deadline) {
-                auto packet = halow::link_rx_pop();
-                if(!packet) {
-                    if(!halow::link_status().up) {
-                        co_await print(halow::link_desynced() ? "link desynced, reboot required\n" : "link down\n");
-                        break;
-                    }
-                    co_await coop::sleep_ms(10);
-                    continue;
-                }
-                shown += 1;
-                const auto p = packet->data();
-                co_ensure(co_await printf<"eth {02x}:{02x}:{02x}:{02x}:{02x}:{02x} <- {02x}:{02x}:{02x}:{02x}:{02x}:{02x} type 0x{04x} len {}\n">(
-                    p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8], p[9], p[10], p[11],
-                    u16(p[12]) << 8 | p[13], packet->len));
-                co_await hexdump(p, packet->len);
-            }
-            co_ensure(co_await printf<"dump done: {} ethernet frames\n">(shown));
         } else if(elms[1] == "saetest") {
             co_ensure(co_await crypto_selftest());
         } else if(elms[1] == "keepalive") {
@@ -338,9 +318,7 @@ auto handle_command(noxx::StringView line) -> coop::Async<bool> {
             if(!link.up) {
                 co_await print(halow::link_desynced() ? "link down (rx desynced, reboot required)\n" : "link down\n");
             } else {
-                co_ensure(co_await printf<"link up: bssid {02x}:{02x}:{02x}:{02x}:{02x}:{02x} aid {} {}khz\n">(
-                    link.bssid[0], link.bssid[1], link.bssid[2], link.bssid[3], link.bssid[4], link.bssid[5],
-                    link.aid, link.freq_khz));
+                co_ensure(co_await printf<"link up: bssid {} aid {} {}khz\n">(link.bssid, link.aid, link.freq_khz));
             }
         } else if(elms[1] == "arp") {
             co_ensure(elms.size() >= 3, "usage: halow arp <target-ipv4> [sender-ipv4]");
@@ -358,7 +336,7 @@ auto handle_command(noxx::StringView line) -> coop::Async<bool> {
             constexpr auto broadcast = net::MacAddr{0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
             const auto&    dst       = (elms.size() >= 5 && elms[4] == "uni") ? halow::link_status().bssid : broadcast;
             co_ensure(co_await halow::eth_tx(dst, net::EtherType::Arp, {(const u8*)&arp, sizeof(arp)}));
-            co_await print("arp request sent, use halow dump to see the reply\n");
+            co_await print("arp request sent\n");
         } else if(elms[1] == "stat") {
             auto status = halow::YapsStatus();
             co_ensure(co_await halow::read_status(status));
@@ -389,10 +367,62 @@ auto handle_command(noxx::StringView line) -> coop::Async<bool> {
         } else {
             co_ensure(false, "invalid halow command");
         }
+    } else if(elms[0] == "net") {
+        co_ensure(elms.size() >= 2, "usage: net <up|ip|ping|arp>");
+        if(elms[1] == "up") {
+            co_ensure(halow::link_status().up, "not connected");
+            // attaching the stack makes link_task deliver rx frames to it
+            netstack.init(halow::netif);
+            const auto runner = co_await coop::reveal_runner();
+            co_ensure(runner->push_task(netstack.timer_task()));
+            co_ensure(co_await printf<"net up on {}\n">(halow::netif.get_mac_addr()));
+        } else if(elms[1] == "ip") {
+            co_ensure(elms.size() >= 3, "usage: net ip <addr> [netmask [gateway]]");
+            co_unwrap(addr, net::parse_ip(elms[2]));
+            netstack.addr = addr;
+            auto netmask  = net::IPv4Addr{255, 255, 255, 0};
+            if(elms.size() >= 4) {
+                co_unwrap(m, net::parse_ip(elms[3]));
+                netmask = m;
+            }
+            netstack.netmask = netmask;
+            if(elms.size() >= 5) {
+                co_unwrap(gw, net::parse_ip(elms[4]));
+                netstack.gateway = gw;
+            }
+            const auto& a = netstack.addr;
+            const auto& n = netstack.netmask;
+            co_ensure(co_await printf<"ip {} netmask {}\n">(a, n));
+        } else if(elms[1] == "ping") {
+            co_ensure(netstack.netif->is_up(), "run net up first");
+            co_ensure(elms.size() >= 3, "usage: net ping <addr> [count]");
+            co_unwrap(target, net::parse_ip(elms[2]));
+            auto count = u32(4);
+            if(elms.size() >= 4) {
+                co_unwrap(v, noxx::from_chars<u32>(elms[3]));
+                count = v;
+            }
+            netstack.on_icmp_echo_reply = on_ping_reply;
+            for(auto i = u32(0); i < count; i += 1) {
+                if(!co_await net::icmp::send_echo(netstack, target, 0xbeef, u16(i), 32)) {
+                    co_await print("ping: send failed\n");
+                }
+                co_await coop::sleep_ms(1000);
+            }
+        } else if(elms[1] == "arp") {
+            for(auto& e : netstack.arp.entries.data) {
+                if(e.state == net::arp::State::Free) {
+                    continue;
+                }
+                co_ensure(co_await printf<"{} -> {} {}\n">(e.ip, e.mac, e.state == net::arp::State::Resolved ? "resolved" : "pending"));
+            }
+        } else {
+            co_ensure(false, "usage: net <up|ip|ping|arp>");
+        }
     } else if(elms[0] == "mac") {
         co_ensure(halow_host_table, "run halow cmd first");
         const auto& mac = (*halow_host_table).mac;
-        co_ensure(co_await printf<"{02x}:{02x}:{02x}:{02x}:{02x}:{02x}\n">(mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]));
+        co_ensure(co_await printf<"{}\n">(mac));
     } else if(elms[0] == "version") {
         const auto id  = FB(hw::dbgmcu::IDCode::DeviceID, DBGMCU_REGS.idcode);
         const auto rev = FB(hw::dbgmcu::IDCode::Revision, DBGMCU_REGS.idcode);

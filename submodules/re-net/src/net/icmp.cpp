@@ -8,9 +8,9 @@
 #include <noxx/assert.hpp>
 
 namespace net::icmp {
-auto input(Stack& stack, const IPv4Addr src, AutoPacket packet) -> void {
+auto input(Stack& stack, const IPv4Addr src, AutoPacket packet) -> coop::Async<void> {
     if(packet->len < sizeof(EchoHeader)) {
-        return;
+        co_return;
     }
     auto& header = *(EchoHeader*)packet->data();
     switch(header.type) {
@@ -20,7 +20,7 @@ auto input(Stack& stack, const IPv4Addr src, AutoPacket packet) -> void {
         header.code     = 0;
         header.checksum = 0;
         header.checksum = noxx::byteswap(ipv4::checksum({packet->data(), packet->len}));
-        ipv4::output(stack, src, ipv4::Proto::Icmp, noxx::move(packet));
+        co_await ipv4::output(stack, src, ipv4::Proto::Icmp, noxx::move(packet));
     } break;
     case Type::EchoReply:
         if(stack.on_icmp_echo_reply != nullptr) {
@@ -34,23 +34,23 @@ auto input(Stack& stack, const IPv4Addr src, AutoPacket packet) -> void {
     }
 }
 
-auto send_echo(Stack& stack, const IPv4Addr dst, const u16 id, const u16 seq, const usize payload_len) -> bool {
+auto send_echo(Stack& stack, const IPv4Addr dst, const u16 id, const u16 seq, const usize payload_len) -> coop::Async<bool> {
     constexpr auto error_value = false;
 
     const auto headroom = sizeof(EthernetHeader) + sizeof(ipv4::Header) + sizeof(EchoHeader);
     auto       packet   = AutoPacket(packet_alloc(headroom));
-    ensure(packet.get() != nullptr);
+    co_ensure(packet.get() != nullptr);
 
     if(payload_len > 0) {
         const auto data = packet->append(payload_len);
-        ensure(data != nullptr, "payload too large");
+        co_ensure(data != nullptr, "payload too large");
         for(auto i = usize(0); i < payload_len; i += 1) {
             data[i] = u8(i);
         }
     }
 
     const auto raw = packet->prepend(sizeof(EchoHeader));
-    ensure(raw != nullptr);
+    co_ensure(raw != nullptr);
     auto& header    = *(EchoHeader*)raw;
     header.type     = Type::EchoRequest;
     header.code     = 0;
@@ -59,6 +59,6 @@ auto send_echo(Stack& stack, const IPv4Addr dst, const u16 id, const u16 seq, co
     header.seq      = noxx::byteswap(seq);
     header.checksum = noxx::byteswap(ipv4::checksum({packet->data(), packet->len}));
 
-    return ipv4::output(stack, dst, ipv4::Proto::Icmp, noxx::move(packet));
+    co_return co_await ipv4::output(stack, dst, ipv4::Proto::Icmp, noxx::move(packet));
 }
 } // namespace net::icmp

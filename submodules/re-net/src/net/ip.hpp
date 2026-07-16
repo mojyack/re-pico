@@ -1,4 +1,5 @@
 #pragma once
+#include <coop/promise.hpp>
 #include <net/mac-addr.hpp>
 #include <net/packet.hpp>
 #include <noxx/array.hpp>
@@ -46,12 +47,12 @@ auto checksum(noxx::Span<const u8> data) -> u16;
 
 // handle a received ipv4 frame (eth header already consumed); src_mac is the
 // ethernet source, learned into the arp cache
-auto input(Stack& stack, MacAddrRef src_mac, AutoPacket packet) -> void;
+auto input(Stack& stack, MacAddrRef src_mac, AutoPacket packet) -> coop::Async<void>;
 
 // prepend an ipv4 header and send toward dst; picks gateway vs on-link and
 // hands off to arp. the packet's data() must point at the l4 payload with
 // sizeof(Header) headroom available.
-auto output(Stack& stack, IPv4Addr dst, u8 proto, AutoPacket packet) -> bool;
+auto output(Stack& stack, IPv4Addr dst, u8 proto, AutoPacket packet) -> coop::Async<bool>;
 } // namespace net::ipv4
 
 #include <noxx/bytes-alias.hpp>

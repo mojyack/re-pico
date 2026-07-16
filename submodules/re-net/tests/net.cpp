@@ -1,7 +1,11 @@
 // phase n1 protocol tests: checksum, arp reply/resolve, icmp echo, ping flow.
-// a capturing NetIf collects every tx frame so the test can inspect the wire.
+// the datapath is coroutine-based, so each test is an Async driven to completion
+// on a throwaway Runner; a capturing NetIf collects every tx frame so the test
+// can inspect the wire.
 #include <stdio.h>
 
+#include <coop/promise.hpp>
+#include <coop/runner.hpp>
 #include <net/arp.hpp>
 #include <net/ethernet.hpp>
 #include <net/icmp.hpp>
@@ -10,6 +14,7 @@
 
 #include <noxx/assert.hpp>
 #include <noxx/endian.hpp>
+#include <noxx/malloc.hpp>
 
 namespace {
 constexpr auto bcast    = net::MacAddr{0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
@@ -23,10 +28,19 @@ auto cap      = noxx::Array<net::Packet*, 16>();
 auto cap_head = usize(0);
 auto cap_tail = usize(0);
 
-auto cap_tx(net::NetIf& /*netif*/, net::AutoPacket packet) -> bool {
-    cap[cap_tail++ % 16] = packet.release();
-    return true;
-}
+// a NetIf that captures every tx frame instead of putting it on a wire
+struct CapNetIf : net::NetIf {
+    auto is_up() const -> bool override {
+        return true;
+    }
+    auto get_mac_addr() const -> net::MacAddrRef override {
+        return our_mac;
+    }
+    auto tx(net::AutoPacket packet) -> coop::Async<bool> override {
+        cap[cap_tail++ % 16] = packet.release();
+        co_return true;
+    }
+};
 
 auto cap_pop() -> net::AutoPacket {
     if(cap_head == cap_tail) {
@@ -39,19 +53,30 @@ auto cap_count() -> usize {
     return cap_tail - cap_head;
 }
 
+// drive a test coroutine to completion on a fresh runner; returns its result
+auto run_sync(coop::Async<bool> task) -> bool {
+    auto runner = coop::Runner();
+    auto ok     = false;
+    if(!runner.push_task([](coop::Async<bool> task, bool& ok) -> coop::Async<void> {
+           ok = co_await noxx::move(task);
+       }(noxx::move(task), ok))) {
+        return false;
+    }
+    runner.run();
+    return ok;
+}
+
 // deliver a raw ethernet frame and run it through the stack
-auto inject(net::Stack& stack, net::NetIf& netif, const noxx::Span<const u8> bytes) -> void {
+auto inject(net::NetIf& netif, const noxx::Span<const u8> bytes) -> coop::Async<void> {
     auto packet  = net::AutoPacket(net::packet_alloc());
     packet->head = 0;
     packet->len  = u16(bytes.size());
     noxx::memcpy(packet->buf, bytes.data, bytes.size());
-    netif.rx(netif, noxx::move(packet));
-    while(stack.dispatch()) {
-    }
+    co_await netif.rx(noxx::move(packet));
 }
 
-auto make_stack(net::NetIf& netif, net::Stack& stack) -> void {
-    netif         = net::NetIf{.mac = our_mac, .link_up = true, .tx = cap_tx};
+auto make_stack(CapNetIf& netif, net::Stack& stack) -> void {
+    netif         = CapNetIf();
     stack         = net::Stack();
     stack.addr    = our_ip;
     stack.netmask = {255, 255, 255, 0};
@@ -83,10 +108,10 @@ auto test_checksum() -> bool {
     return true;
 }
 
-auto test_arp_reply() -> bool {
+auto test_arp_reply() -> coop::Async<bool> {
     constexpr auto error_value = false;
 
-    auto netif = net::NetIf();
+    auto netif = CapNetIf();
     auto stack = net::Stack();
     make_stack(netif, stack);
     cap_head = cap_tail = 0;
@@ -96,26 +121,26 @@ auto test_arp_reply() -> bool {
     put_eth(frame.data, {0xff, 0xff, 0xff, 0xff, 0xff, 0xff}, peer_mac, net::EtherType::Arp);
     const auto body = net::arp::build_request(peer_mac, peer_ip, our_ip);
     noxx::memcpy(frame.data + 14, &body, sizeof(body));
-    inject(stack, netif, frame);
+    co_await inject(netif, frame);
 
     // exactly one reply frame
-    ensure(cap_count() == 1);
+    co_ensure(cap_count() == 1);
     auto reply = cap_pop();
-    ensure(reply->len == 42);
+    co_ensure(reply->len == 42);
     const auto& eth = *(const net::EthernetHeader*)reply->data();
-    ensure(noxx::byteswap(eth.ethertype) == net::EtherType::Arp);
-    ensure(eth.dst == peer_mac);
-    ensure(eth.src == our_mac);
+    co_ensure(noxx::byteswap(eth.ethertype) == net::EtherType::Arp);
+    co_ensure(eth.dst == peer_mac);
+    co_ensure(eth.src == our_mac);
     const auto& ap = *(const net::arp::Packet*)(reply->data() + 14);
-    ensure(noxx::byteswap(ap.op) == net::arp::Op::Reply);
-    ensure(ap.sender_ip == our_ip);
-    ensure(ap.sender_mac == our_mac);
-    ensure(ap.target_ip == peer_ip);
+    co_ensure(noxx::byteswap(ap.op) == net::arp::Op::Reply);
+    co_ensure(ap.sender_ip == our_ip);
+    co_ensure(ap.sender_mac == our_mac);
+    co_ensure(ap.target_ip == peer_ip);
 
     // and the sender got learned
-    unwrap(mac, net::arp::lookup(stack.arp, peer_ip));
-    ensure(mac == peer_mac);
-    return true;
+    co_unwrap(mac, net::arp::lookup(stack.arp, peer_ip));
+    co_ensure(mac == peer_mac);
+    co_return true;
 }
 
 // build an ethernet+ipv4+icmp echo frame into out; returns total length
@@ -146,38 +171,38 @@ auto build_echo(u8* const out, const net::MacAddr src_mac, const net::IPv4Addr s
     return 14 + sizeof(net::ipv4::Header) + icmp_len;
 }
 
-auto test_icmp_echo_reply() -> bool {
+auto test_icmp_echo_reply() -> coop::Async<bool> {
     constexpr auto error_value = false;
 
-    auto netif = net::NetIf();
+    auto netif = CapNetIf();
     auto stack = net::Stack();
     make_stack(netif, stack);
     cap_head = cap_tail = 0;
 
     // learn the peer first so the reply goes out without an arp round trip
-    net::arp::cache(stack, peer_ip, peer_mac);
+    co_await net::arp::cache(stack, peer_ip, peer_mac);
 
     auto       frame = noxx::Array<u8, 128>();
     const auto n     = build_echo(frame.data, peer_mac, peer_ip, our_ip, net::icmp::Type::EchoRequest, 0x1234, 7, 16);
-    inject(stack, netif, {frame.data, n});
+    co_await inject(netif, {frame.data, n});
 
-    ensure(cap_count() == 1);
+    co_ensure(cap_count() == 1);
     auto        reply = cap_pop();
     const auto& eth   = *(const net::EthernetHeader*)reply->data();
-    ensure(noxx::byteswap(eth.ethertype) == net::EtherType::IPv4);
-    ensure(eth.dst == peer_mac);
+    co_ensure(noxx::byteswap(eth.ethertype) == net::EtherType::IPv4);
+    co_ensure(eth.dst == peer_mac);
     const auto& ip = *(const net::ipv4::Header*)(reply->data() + 14);
-    ensure(ip.proto == net::ipv4::Proto::Icmp);
-    ensure(ip.src == our_ip);
-    ensure(ip.dst == peer_ip);
-    ensure(net::ipv4::checksum({(const u8*)&ip, sizeof(ip)}) == 0); // valid ip checksum
+    co_ensure(ip.proto == net::ipv4::Proto::Icmp);
+    co_ensure(ip.src == our_ip);
+    co_ensure(ip.dst == peer_ip);
+    co_ensure(net::ipv4::checksum({(const u8*)&ip, sizeof(ip)}) == 0); // valid ip checksum
     const auto  icmp_len = usize(noxx::byteswap(ip.total_len)) - sizeof(ip);
     const auto& icmp     = *(const net::icmp::EchoHeader*)(reply->data() + 14 + sizeof(ip));
-    ensure(icmp.type == net::icmp::Type::EchoReply);
-    ensure(noxx::byteswap(icmp.id) == 0x1234);
-    ensure(noxx::byteswap(icmp.seq) == 7);
-    ensure(net::ipv4::checksum({(const u8*)&icmp, icmp_len}) == 0); // valid icmp checksum
-    return true;
+    co_ensure(icmp.type == net::icmp::Type::EchoReply);
+    co_ensure(noxx::byteswap(icmp.id) == 0x1234);
+    co_ensure(noxx::byteswap(icmp.seq) == 7);
+    co_ensure(net::ipv4::checksum({(const u8*)&icmp, icmp_len}) == 0); // valid icmp checksum
+    co_return true;
 }
 
 auto reply_id  = u16(0);
@@ -190,22 +215,22 @@ auto on_echo_reply(net::Stack& /*self*/, const net::IPv4Addr /*src*/, const u16 
     reply_len = data.size();
 }
 
-auto test_ping_flow() -> bool {
+auto test_ping_flow() -> coop::Async<bool> {
     constexpr auto error_value = false;
 
-    auto netif = net::NetIf();
+    auto netif = CapNetIf();
     auto stack = net::Stack();
     make_stack(netif, stack);
     stack.on_icmp_echo_reply = on_echo_reply;
     cap_head = cap_tail = 0;
 
     // outbound ping to an unresolved on-link host: only an arp request goes out
-    ensure(net::icmp::send_echo(stack, peer_ip, 0x2222, 1, 32));
-    ensure(cap_count() == 1);
+    co_ensure(co_await net::icmp::send_echo(stack, peer_ip, 0x2222, 1, 32));
+    co_ensure(cap_count() == 1);
     auto        req = cap_pop();
     const auto& eth = *(const net::EthernetHeader*)req->data();
-    ensure(noxx::byteswap(eth.ethertype) == net::EtherType::Arp);
-    ensure(eth.dst == bcast);
+    co_ensure(noxx::byteswap(eth.ethertype) == net::EtherType::Arp);
+    co_ensure(eth.dst == bcast);
 
     // arp reply flushes the pending echo request
     auto af = noxx::Array<u8, 42>();
@@ -215,70 +240,73 @@ auto test_ping_flow() -> bool {
     noxx::memcpy(ab.target_mac.data, our_mac.data, 6);
     ab.target_ip = our_ip;
     noxx::memcpy(af.data + 14, &ab, sizeof(ab));
-    inject(stack, netif, af);
+    co_await inject(netif, af);
 
-    ensure(cap_count() == 1);
+    co_ensure(cap_count() == 1);
     auto        echo = cap_pop();
     const auto& eeth = *(const net::EthernetHeader*)echo->data();
-    ensure(noxx::byteswap(eeth.ethertype) == net::EtherType::IPv4);
-    ensure(eeth.dst == peer_mac);
+    co_ensure(noxx::byteswap(eeth.ethertype) == net::EtherType::IPv4);
+    co_ensure(eeth.dst == peer_mac);
     const auto& ip = *(const net::ipv4::Header*)(echo->data() + 14);
-    ensure(ip.proto == net::ipv4::Proto::Icmp);
-    ensure(ip.dst == peer_ip);
+    co_ensure(ip.proto == net::ipv4::Proto::Icmp);
+    co_ensure(ip.dst == peer_ip);
 
     // feed the matching echo reply back; the callback must fire
     reply_id = reply_seq = 0;
     reply_len            = 0;
     auto       rf        = noxx::Array<u8, 128>();
     const auto n         = build_echo(rf.data, peer_mac, peer_ip, our_ip, net::icmp::Type::EchoReply, 0x2222, 1, 32);
-    inject(stack, netif, {rf.data, n});
-    ensure(reply_id == 0x2222);
-    ensure(reply_seq == 1);
-    ensure(reply_len == 32);
-    return true;
+    co_await inject(netif, {rf.data, n});
+    co_ensure(reply_id == 0x2222);
+    co_ensure(reply_seq == 1);
+    co_ensure(reply_len == 32);
+    co_return true;
 }
 
-auto test_arp_retry() -> bool {
+auto test_arp_retry() -> coop::Async<bool> {
     constexpr auto error_value = false;
 
-    auto netif = net::NetIf();
+    auto netif = CapNetIf();
     auto stack = net::Stack();
     make_stack(netif, stack);
     cap_head = cap_tail = 0;
 
     // unresolved send queues one request
-    ensure(net::icmp::send_echo(stack, peer_ip, 1, 1, 0));
-    ensure(cap_count() == 1);
+    co_ensure(co_await net::icmp::send_echo(stack, peer_ip, 1, 1, 0));
+    co_ensure(cap_count() == 1);
     (void)cap_pop();
 
     // ticking past each retry interval re-requests, up to max_retries total
     auto now = u64(0);
     for(auto i = usize(0); i < net::arp::max_retries; i += 1) {
         now += net::arp::retry_interval_ms;
-        stack.tick(now);
+        co_await stack.tick(now);
     }
     // (max_retries - 1) additional requests after the first
-    ensure(cap_count() == net::arp::max_retries - 1);
+    co_ensure(cap_count() == net::arp::max_retries - 1);
     while(cap_pop().get() != nullptr) {
     }
 
     // one more tick gives up and drops the entry
     now += net::arp::retry_interval_ms;
-    stack.tick(now);
-    ensure(!net::arp::lookup(stack.arp, peer_ip));
-    return true;
+    co_await stack.tick(now);
+    co_ensure(!net::arp::lookup(stack.arp, peer_ip));
+    co_return true;
 }
 } // namespace
 
 auto main() -> int {
     constexpr auto error_value = 1;
 
+    static auto heap = noxx::Array<u8, 1 << 20>(); // coop task/frame allocations
+    noxx::set_heap(heap.data, heap.size());
     net::packet_pool_init();
+
     ensure(test_checksum());
-    ensure(test_arp_reply());
-    ensure(test_icmp_echo_reply());
-    ensure(test_ping_flow());
-    ensure(test_arp_retry());
+    ensure(run_sync(test_arp_reply()));
+    ensure(run_sync(test_icmp_echo_reply()));
+    ensure(run_sync(test_ping_flow()));
+    ensure(run_sync(test_arp_retry()));
     printf("all tests passed\n");
     return 0;
 }

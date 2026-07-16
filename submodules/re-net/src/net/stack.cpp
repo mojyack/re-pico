@@ -16,78 +16,60 @@ namespace {
 constexpr auto timer_period_ms = u64(250);
 } // namespace
 
-auto Stack::on_rx(NetIf& netif, AutoPacket packet) -> void {
-    // enqueue and wake run(); the frame is demuxed later on its loop
-    auto&      self = *(Stack*)netif.stack;
-    const auto raw  = packet.release();
-    raw->next       = nullptr;
-    if(self.rx_tail == nullptr) {
-        self.rx_head = raw;
-    } else {
-        self.rx_tail->next = raw;
+auto NetIf::rx(AutoPacket packet) -> coop::Async<void> {
+    if(packet->len < sizeof(EthernetHeader)) {
+        co_return;
     }
-    self.rx_tail = raw;
-    self.rx_event.notify();
-}
-
-auto Stack::run() -> coop::Async<void> {
-    while(true) {
-        while(dispatch()) {
-        }
-        co_await rx_event;
+    const auto header = *(const EthernetHeader*)packet->data();
+    const auto src    = header.src;
+    packet->consume(sizeof(EthernetHeader));
+    switch(noxx::byteswap(header.ethertype)) {
+    case EtherType::Arp:
+        co_await arp::input(*stack, noxx::move(packet));
+        break;
+    case EtherType::IPv4:
+        co_await ipv4::input(*stack, src, noxx::move(packet));
+        break;
+    default:
+        break; // drop everything else
     }
 }
 
 auto Stack::timer_task() -> coop::Async<void> {
     while(true) {
         co_await coop::sleep_ms(timer_period_ms);
-        tick(coop::now_us() / 1000);
+        co_await tick(coop::now_us() / 1000);
     }
 }
 
 auto Stack::init(NetIf& netif) -> void {
     this->netif = &netif;
     netif.stack = this;
-    netif.rx    = on_rx;
 }
 
-auto Stack::dispatch() -> bool {
-    if(rx_head == nullptr) {
-        return false;
-    }
-    auto packet = AutoPacket(rx_head);
-    rx_head     = packet->next;
-    if(rx_head == nullptr) {
-        rx_tail = nullptr;
-    }
-    packet->next = nullptr;
-    process(noxx::move(packet));
-    return true;
-}
-
-auto Stack::tick(const u64 now_ms) -> void {
+auto Stack::tick(const u64 now_ms) -> coop::Async<void> {
     this->now_ms = now_ms;
-    arp::tick(*this, now_ms);
+    co_await arp::tick(*this, now_ms);
 }
 
-auto Stack::send(AutoPacket packet) -> bool {
+auto Stack::send(AutoPacket packet) -> coop::Async<bool> {
     constexpr auto error_value = false;
 
-    ensure(netif != nullptr && netif->tx != nullptr && netif->link_up);
-    return netif->tx(*netif, noxx::move(packet));
+    co_ensure(netif != nullptr && netif->is_up());
+    co_return co_await netif->tx(noxx::move(packet));
 }
 
-auto Stack::eth_send(const MacAddrRef dst, const u16 ethertype, AutoPacket packet) -> bool {
+auto Stack::eth_send(const MacAddrRef dst, const u16 ethertype, AutoPacket packet) -> coop::Async<bool> {
     constexpr auto error_value = false;
 
-    ensure(netif != nullptr);
+    co_ensure(netif != nullptr);
     const auto raw = packet->prepend(sizeof(EthernetHeader));
-    ensure(raw != nullptr, "no headroom for ethernet header");
+    co_ensure(raw != nullptr, "no headroom for ethernet header");
     auto& header = *(EthernetHeader*)raw;
     noxx::memcpy(header.dst.data, dst.data, MacAddr::size());
-    noxx::memcpy(header.src.data, netif->mac.data, MacAddr::size());
+    noxx::memcpy(header.src.data, netif->get_mac_addr().data, MacAddr::size());
     header.ethertype = noxx::byteswap(ethertype);
-    return send(noxx::move(packet));
+    co_return co_await send(noxx::move(packet));
 }
 
 auto Stack::on_link(const IPv4Addr ip) const -> bool {
@@ -97,24 +79,5 @@ auto Stack::on_link(const IPv4Addr ip) const -> bool {
         }
     }
     return true;
-}
-
-auto Stack::process(AutoPacket packet) -> void {
-    if(packet->len < sizeof(EthernetHeader)) {
-        return;
-    }
-    const auto header = *(const EthernetHeader*)packet->data();
-    const auto src    = header.src;
-    packet->consume(sizeof(EthernetHeader));
-    switch(noxx::byteswap(header.ethertype)) {
-    case EtherType::Arp:
-        arp::input(*this, noxx::move(packet));
-        break;
-    case EtherType::IPv4:
-        ipv4::input(*this, src, noxx::move(packet));
-        break;
-    default:
-        break; // drop everything else
-    }
 }
 } // namespace net

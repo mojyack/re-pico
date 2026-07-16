@@ -29,6 +29,9 @@ constexpr auto is_same = IsSame<A, B>::value;
 static_assert(is_same<int, int>);
 static_assert(!is_same<int, char>);
 
+template <class A, class B>
+concept same_as = is_same<A, B>;
+
 // conditional
 template <bool c, class A, class B>
 constexpr auto conditional() -> auto {

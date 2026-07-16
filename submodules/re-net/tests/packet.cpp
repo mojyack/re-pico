@@ -1,15 +1,44 @@
 #include <stdio.h>
 
+#include <coop/promise.hpp>
+#include <coop/runner.hpp>
 #include <net/stack.hpp>
 
 #include <noxx/assert.hpp>
+#include <noxx/malloc.hpp>
 
 namespace {
 auto tx_count = usize(0);
 
-auto test_tx(net::NetIf& /*netif*/, net::AutoPacket /*packet*/) -> bool {
-    tx_count += 1;
-    return true;
+constexpr auto test_mac = net::MacAddr{0x02, 0x00, 0x00, 0x00, 0x00, 0x01};
+
+// a NetIf with a settable link state that just counts tx frames
+struct CountNetIf : net::NetIf {
+    bool up = false;
+
+    auto is_up() const -> bool override {
+        return up;
+    }
+    auto get_mac_addr() const -> net::MacAddrRef override {
+        return test_mac;
+    }
+    auto tx(net::AutoPacket /*packet*/) -> coop::Async<bool> override {
+        tx_count += 1;
+        co_return true;
+    }
+};
+
+// drive a test coroutine to completion on a fresh runner; returns its result
+auto run_sync(coop::Async<bool> task) -> bool {
+    auto runner = coop::Runner();
+    auto ok     = false;
+    if(!runner.push_task([](coop::Async<bool> task, bool& ok) -> coop::Async<void> {
+           ok = co_await noxx::move(task);
+       }(noxx::move(task), ok))) {
+        return false;
+    }
+    runner.run();
+    return ok;
 }
 
 auto test_packet_pool() -> bool {
@@ -60,48 +89,45 @@ auto test_packet_room() -> bool {
     return true;
 }
 
-auto test_stack_rx() -> bool {
+auto test_stack_rx() -> coop::Async<bool> {
     constexpr auto error_value = false;
 
     net::packet_pool_init();
-    auto netif = net::NetIf{.tx = test_tx};
+    auto netif = CountNetIf();
     auto stack = net::Stack();
     stack.init(netif);
-    ensure(netif.rx != nullptr);
+    co_ensure(netif.stack == &stack);
 
-    // nothing queued yet
-    ensure(!stack.dispatch());
-
-    // deliver three frames, dispatch must pop exactly three
+    // rx is inline now: co_await netif.rx demuxes each frame and frees it. these
+    // carry no valid ethertype, so they are dropped and return to the pool
+    const auto before = net::packet_pool_avail();
     for(auto i = usize(0); i < 3; i += 1) {
         auto packet = net::AutoPacket(net::packet_alloc());
-        ensure(packet.get() != nullptr);
-        ensure(packet->append(60) != nullptr);
-        netif.rx(netif, noxx::move(packet));
+        co_ensure(packet.get() != nullptr);
+        co_ensure(packet->append(60) != nullptr);
+        co_await netif.rx(noxx::move(packet));
     }
-    ensure(stack.dispatch());
-    ensure(stack.dispatch());
-    ensure(stack.dispatch());
-    ensure(!stack.dispatch());
-    // dispatched packets must return to the pool
-    ensure(net::packet_pool_avail() > 0);
+    co_ensure(net::packet_pool_avail() == before);
 
     // tx path: refused while link is down, forwarded when up
     tx_count = 0;
-    ensure(!stack.send(net::AutoPacket(net::packet_alloc())));
-    netif.link_up = true;
-    ensure(stack.send(net::AutoPacket(net::packet_alloc())));
-    ensure(tx_count == 1);
-    return true;
+    co_ensure(!co_await stack.send(net::AutoPacket(net::packet_alloc())));
+    netif.up = true;
+    co_ensure(co_await stack.send(net::AutoPacket(net::packet_alloc())));
+    co_ensure(tx_count == 1);
+    co_return true;
 }
 } // namespace
 
 auto main() -> int {
     constexpr auto error_value = 1;
 
+    static auto heap = noxx::Array<u8, 1 << 20>(); // coop task/frame allocations
+    noxx::set_heap(heap.data, heap.size());
+
     ensure(test_packet_pool());
     ensure(test_packet_room());
-    ensure(test_stack_rx());
+    ensure(run_sync(test_stack_rx()));
     printf("all tests passed\n");
     return 0;
 }

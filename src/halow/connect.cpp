@@ -1,9 +1,9 @@
+#include <connect/eapol.hpp>
+#include <connect/sae.hpp>
 #include <coop/promise.hpp>
 #include <coop/runner.hpp>
 #include <coop/task-handle.hpp>
 #include <coop/timer.hpp>
-#include <connect/eapol.hpp>
-#include <connect/sae.hpp>
 #include <crypto/rng.hpp>
 #include <hal/rng.hpp>
 #include <hal/time.hpp>
@@ -15,6 +15,7 @@
 
 #include "command.hpp"
 #include "connect.hpp"
+#include "netif.hpp"
 #include "rate-code.hpp"
 #include "scan.hpp"
 #include "util.hpp"
@@ -79,29 +80,10 @@ auto prim_bw_mhz = u8(1);
 // link maintenance task state (see link_task)
 constexpr auto keepalive_interval_us = u64(30'000'000); // idle time before a keepalive, well under the ap inactivity timeout
 constexpr auto rx_error_limit        = u32(8);          // consecutive rx stream errors treated as a desync
-constexpr auto rx_queue_max          = u32(6);          // decoded frames buffered for link_rx_pop
 
 auto desynced      = false;              // rx stream wedged, chip reboot required
 auto last_activity = u64(0);             // last rx/tx time, drives the keepalive timer
 auto link_handle   = coop::TaskHandle(); // link_task's handle, cancelled by disconnect
-
-auto rx_queue_head = (net::Packet*)(nullptr);
-auto rx_queue_len  = u32(0);
-
-auto queue_rx(net::Packet* const packet) -> void {
-    if(rx_queue_len >= rx_queue_max) {
-        log<"halow: link rx queue full, dropping frame\n">();
-        net::packet_free(packet);
-        return;
-    }
-    packet->next = nullptr;
-    auto tail    = &rx_queue_head;
-    while(*tail != nullptr) {
-        tail = &(*tail)->next;
-    }
-    *tail = packet;
-    rx_queue_len += 1;
-}
 
 auto mgmt_rate() -> u32 {
     return make_s1g_rate_code(prim_bw_mhz == 1 ? RateBw::Bw1Mhz : RateBw::Bw2Mhz, 0, 0);
@@ -196,8 +178,8 @@ auto configure_channel(const connect::ie::S1gOp& s1g_op) -> coop::Async<bool> {
 
     const auto regdom = find_regdom();
     co_ensure(regdom != nullptr);
-    const S1gChannel* op_chan  = nullptr;
-    const S1gChannel* pri_chan = nullptr;
+    auto op_chan  = (const S1gChannel*)nullptr;
+    auto pri_chan = (const S1gChannel*)nullptr;
     for(auto i = u32(0); i < regdom->num_channels; i += 1) {
         const auto& channel = regdom->channels[i];
         if(channel.chan_num == s1g_op.channel_center_freq) {
@@ -567,14 +549,14 @@ auto mark_link_down() -> void {
 
 // classify one from-air frame: tear the link down on deauth/disassoc from the
 // ap, decode data frames into the rx queue, drop the rest
-auto handle_air_frame(net::AutoPacket rx) -> void {
+auto handle_air_frame(net::AutoPacket rx) -> coop::Async<void> {
     const auto skbh = parse_skb_header(*rx);
     if(skbh == nullptr) {
-        return;
+        co_return;
     }
     if(skbh->channel == SkbChan::TxStatus) {
         log_tx_status(*rx, *skbh);
-        return;
+        co_return;
     }
 
     // peek the 802.11 frame control for a deauth/disassoc from our bss before
@@ -583,7 +565,7 @@ auto handle_air_frame(net::AutoPacket rx) -> void {
     auto       len  = usize(skbh->len);
     if(skbh->rx_status.flags & RxFlag::FcsIncluded) {
         if(len < dot11::fcs_len) {
-            return;
+            co_return;
         }
         len -= dot11::fcs_len;
     }
@@ -593,12 +575,14 @@ auto handle_air_frame(net::AutoPacket rx) -> void {
         if((kind == dot11::Fc::Deauth || kind == dot11::Fc::Disassoc) && mac_equal(wifi->addr2.data, link.bssid.data)) {
             log<"halow: ap sent {}, link down\n">(kind == dot11::Fc::Deauth ? "deauth" : "disassoc");
             mark_link_down();
-            return;
+            co_return;
         }
     }
 
-    if(eth_from_rx(*rx)) {
-        queue_rx(rx.release());
+    // deliver the decoded ethernet frame straight to the ip stack; frames that
+    // arrive before `net up` attaches the stack are dropped here
+    if(eth_from_rx(*rx) && netif.stack != nullptr) {
+        co_await netif.rx(noxx::move(rx));
     }
 }
 } // namespace
@@ -613,7 +597,7 @@ auto connect(const dot11::MacAddr& mac, const noxx::StringView ssid, const noxx:
     // find the ap
     auto results = noxx::Array<ScanResult, 4>();
     co_unwrap(count, co_await scan(mac, ssid, results));
-    const ScanResult* ap = nullptr;
+    auto ap = (const ScanResult*)nullptr;
     for(auto i = usize(0); i < count; i += 1) {
         const auto& res = results[i];
         if(res.ssid_len == ssid.size() && noxx::StringView((const char*)res.ssid, res.ssid_len) == ssid) {
@@ -626,8 +610,7 @@ auto connect(const dot11::MacAddr& mac, const noxx::StringView ssid, const noxx:
     const auto ap_privacy = bool(ap->capability_info & dot11::CapInfo::Privacy);
     co_ensure(secure || !ap_privacy, "ap requires encryption, pass a password");
     co_ensure(!secure || ap_privacy, "ap is open, do not pass a password");
-    log<"halow: connecting to {02x}:{02x}:{02x}:{02x}:{02x}:{02x} rssi {}\n">(
-        ap->bssid[0], ap->bssid[1], ap->bssid[2], ap->bssid[3], ap->bssid[4], ap->bssid[5], ap->rssi);
+    log<"halow: connecting to {} rssi {}\n">(ap->bssid, ap->rssi);
 
     link.mac       = mac;
     link.bssid     = ap->bssid;
@@ -643,52 +626,53 @@ auto connect(const dot11::MacAddr& mac, const noxx::StringView ssid, const noxx:
     co_ensure(vif != vif_invalid);
     link.vif = vif;
 
-    auto ok = co_await configure_channel(*ap->s1g_op);
+    // need to remove interface on failure from here
+    do {
+#pragma push_macro("error_act")
+#define error_act break
 
-    // ref mmdrv_cfg_bss: beacon interval, dtim 0, cssid 0
-    if(ok) {
+        co_ensure(co_await configure_channel(*ap->s1g_op));
+        // ref mmdrv_cfg_bss: beacon interval, dtim 0, cssid 0
         const auto req = BssConfigReq{
             .beacon_interval_tu = ap->beacon_interval,
             .dtim_period        = 0,
             .cssid              = 0,
         };
-        ok = bool(co_await send_command(CommandId::BssConfig, as_span(req), {}, link.vif));
-    }
+        co_ensure(co_await send_command(CommandId::BssConfig, as_span(req), {}, link.vif));
 
-    // keep the radio awake: chip power save would doze between beacons,
-    // dropping data tx and the ap's probes
-    if(ok) {
+        // keep the radio awake: chip power save would doze between beacons,
+        // dropping data tx and the ap's probes
         const auto ps_req = ConfigPsReq{
             .enabled            = 0,
             .dynamic_ps_offload = 0,
         };
-        ok = bool(co_await send_command(CommandId::ConfigPs, as_span(ps_req), {}, link.vif));
-    }
+        co_ensure(co_await send_command(CommandId::ConfigPs, as_span(ps_req), {}, link.vif));
 
-    ok = ok && co_await configure_qos();
-    ok = ok && (secure ? co_await sae_authenticate(ssid, password) : co_await authenticate());
-    ok = ok && co_await set_sta_state(StaState::Authenticated, 0);
-    ok = ok && co_await associate(ssid, secure);
-    // the 4-way handshake runs over the datapath while still authenticated, then
-    // installs the ccmp keys before the port is authorized
-    ok = ok && (secure ? co_await four_way_handshake() : true);
-    ok = ok && co_await set_sta_state(StaState::Authorized, link.aid);
+        co_ensure(co_await configure_qos());
+        co_ensure((secure ? co_await sae_authenticate(ssid, password) : co_await authenticate()));
+        co_ensure(co_await set_sta_state(StaState::Authenticated, 0));
+        co_ensure(co_await associate(ssid, secure));
+        // the 4-way handshake runs over the datapath while still authenticated, then
+        // installs the ccmp keys before the port is authorized
+        co_ensure((secure ? co_await four_way_handshake() : true));
+        co_ensure(co_await set_sta_state(StaState::Authorized, link.aid));
 
-    if(!ok) {
-        log<"halow: connect failed, removing interface\n">();
-        co_await send_command(CommandId::RemoveInterface, {}, {}, link.vif);
-        link = LinkStatus();
-        co_return false;
-    }
+        link.up       = true;
+        desynced      = false;
+        last_activity = time::now();
+        // hand ongoing rx / keepalive / loss detection to a background task,
+        // keeping its handle so disconnect can cancel it
+        co_ensure((co_await coop::reveal_runner())->push_task(link_task(), &link_handle), "failed to start link task");
+        log<"halow: associated, aid {}\n">(link.aid);
+        co_return true;
 
-    link.up       = true;
-    desynced      = false;
-    last_activity = time::now();
-    // hand ongoing rx / keepalive / loss detection to a background task,
-    // keeping its handle so disconnect can cancel it
-    co_ensure((co_await coop::reveal_runner())->push_task(link_task(), &link_handle), "failed to start link task");
-    log<"halow: associated, aid {}\n">(link.aid);
-    co_return true;
+#pragma pop_macro("error_act")
+    } while(0);
+
+    log<"halow: connect failed, removing interface\n">();
+    co_await send_command(CommandId::RemoveInterface, {}, {}, link.vif);
+    link = LinkStatus();
+    co_return false;
 }
 
 auto disconnect() -> coop::Async<bool> {
@@ -700,8 +684,6 @@ auto disconnect() -> coop::Async<bool> {
     // task is still alive and the handle is valid)
     link_handle.cancel();
     link.up = false;
-    while(auto packet = link_rx_pop()) {
-    }
 
     const auto deauth = dot11::Deauth{
         .header      = make_mgmt_header(dot11::Fc::Deauth, link.bssid, link.mac, link.bssid),
@@ -717,16 +699,6 @@ auto disconnect() -> coop::Async<bool> {
 
 auto link_desynced() -> bool {
     return desynced;
-}
-
-auto link_rx_pop() -> net::AutoPacket {
-    const auto packet = rx_queue_head;
-    if(packet != nullptr) {
-        rx_queue_head = packet->next;
-        packet->next  = nullptr;
-        rx_queue_len -= 1;
-    }
-    return net::AutoPacket(packet);
 }
 
 auto send_keepalive() -> coop::Async<bool> {
@@ -787,7 +759,7 @@ auto link_task() -> coop::Async<bool> {
             rx_errors     = 0;
             handled       = true;
             last_activity = time::now();
-            handle_air_frame(noxx::move(*rx_o));
+            co_await handle_air_frame(noxx::move(*rx_o));
         } else {
             rx_errors = 0;
         }
@@ -804,9 +776,6 @@ auto link_task() -> coop::Async<bool> {
         }
     }
 
-    // free any frames the consumer never drained
-    while(auto packet = link_rx_pop()) {
-    }
     // reached only on an involuntary loss — an explicit disconnect cancels the
     // task before it gets here. remove the chip interface so a later connect
     // starts clean, and reset the link state

@@ -47,13 +47,9 @@ auto eth_from_rx(net::Packet& packet) -> bool;
 // the association fresh against the ap's inactivity timeout
 auto send_keepalive() -> coop::Async<bool>;
 
-// pop the next decoded ethernet frame the maintenance task has queued, or a
-// null packet if none is pending. this is the datapath rx entry point while
-// connected (link_task owns the raw yaps stream)
-auto link_rx_pop() -> net::AutoPacket;
-
 // background link-maintenance coroutine, spawned by connect as an independent
-// task. drains rx, delivers data frames to link_rx_pop, sends periodic
-// keepalives, and tears the link down on deauth / beacon loss / rx desync
+// task. drains rx, delivers decoded data frames straight to the attached
+// net::Stack (halow::netif), sends periodic keepalives, and tears the link down
+// on deauth / beacon loss / rx desync
 auto link_task() -> coop::Async<bool>;
 } // namespace halow

@@ -42,16 +42,21 @@ auto hexdump(const noxx::Span<const u8> data) -> void {
 }
 
 // NetIf backed by a non-blocking tap file descriptor
-struct TapNetIf {
-    net::NetIf netif;
-    int        fd = -1;
+struct TapNetIf : net::NetIf {
+    int fd = -1;
 
-    static auto tx(net::NetIf& netif, net::AutoPacket packet) -> bool {
+    auto is_up() const -> bool override {
+        return true;
+    }
+    auto get_mac_addr() const -> net::MacAddrRef override {
+        static constexpr auto mac = net::MacAddr{0x02, 0x00, 0x00, 0xe0, 0x0b, 0x05}; // locally administered
+        return mac;
+    }
+    auto tx(net::AutoPacket packet) -> coop::Async<bool> override {
         constexpr auto error_value = false;
 
-        auto& self = *(TapNetIf*)netif.driver;
-        ensure(write(self.fd, packet->data(), packet->len) == packet->len, "tap write failed");
-        return true;
+        co_ensure(write(fd, packet->data(), packet->len) == packet->len, "tap write failed");
+        co_return true;
     }
 
     auto init(const char* const name) -> bool {
@@ -64,11 +69,6 @@ struct TapNetIf {
         ifr.ifr_flags = IFF_TAP | IFF_NO_PI;
         strncpy(ifr.ifr_name, name, IFNAMSIZ - 1);
         ensure(ioctl(fd, TUNSETIFF, &ifr) >= 0, "TUNSETIFF failed (is the tap created?)");
-
-        netif.mac     = {0x02, 0x00, 0x00, 0xe0, 0x0b, 0x05}; // locally administered
-        netif.link_up = true;
-        netif.driver  = this;
-        netif.tx      = tx;
         return true;
     }
 
@@ -90,7 +90,8 @@ struct TapNetIf {
 };
 
 // pump the tap fd into the stack: non-blocking reads, yielding when idle. this
-// stands in for the board's interrupt-driven driver rx task.
+// is the rx loop — it co_awaits netif.rx, which demuxes the frame inline. stands
+// in for the board's interrupt-driven driver rx task.
 auto reader_task(TapNetIf& tap) -> coop::Async<void> {
     while(true) {
         auto packet = net::AutoPacket(tap.rx_pop());
@@ -100,7 +101,7 @@ auto reader_task(TapNetIf& tap) -> coop::Async<void> {
         }
         printf("rx %u bytes\n", unsigned(packet->len));
         hexdump({packet->data(), packet->len});
-        tap.netif.rx(tap.netif, noxx::move(packet));
+        co_await tap.rx(noxx::move(packet));
     }
 }
 
@@ -118,7 +119,7 @@ auto ping_task(net::Stack& stack, const net::IPv4Addr target) -> coop::Async<voi
     auto       seq = u16(0);
     while(true) {
         ping_sent_at[seq & 0xff] = now_ms();
-        if(!net::icmp::send_echo(stack, target, id, seq, 32)) {
+        if(!co_await net::icmp::send_echo(stack, target, id, seq, 32)) {
             printf("ping: send failed (packet pool?)\n");
         }
         seq += 1;
@@ -140,7 +141,7 @@ auto main(const int argc, const char* const argv[]) -> int {
     ensure(tap.init(argv[1]));
 
     auto stack = net::Stack();
-    stack.init(tap.netif);
+    stack.init(tap);
     if(argc >= 3) {
         unwrap(addr, net::parse_ip(argv[2]));
         stack.addr    = addr;
@@ -148,7 +149,6 @@ auto main(const int argc, const char* const argv[]) -> int {
     }
 
     auto runner = coop::Runner();
-    ensure(runner.push_task(stack.run()));
     ensure(runner.push_task(stack.timer_task()));
     ensure(runner.push_task(reader_task(tap)));
 

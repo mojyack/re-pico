@@ -24,6 +24,7 @@ EKH05_OBJS := $(OUT)/ekh05/main.o \
 			  $(OUT)/halow/yaps.o \
 			  $(OUT)/halow/scan.o \
 			  $(OUT)/halow/connect.o \
+			  $(OUT)/halow/netif.o \
 			  $(OUT)/net/packet.o \
 			  $(OUT)/net/ip.o \
 			  $(OUT)/net/arp.o \

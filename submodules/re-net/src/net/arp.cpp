@@ -39,7 +39,7 @@ auto alloc(Table& table) -> Entry* {
 }
 
 // build an arp packet with our addresses as the sender
-auto send(Stack& stack, const u16 op, MacAddrRef eth_dst, MacAddrRef arp_target_mac, const IPv4Addr target_ip) -> bool {
+auto send(Stack& stack, const u16 op, MacAddrRef eth_dst, MacAddrRef arp_target_mac, const IPv4Addr target_ip) -> coop::Async<bool> {
     constexpr auto error_value = false;
 
     auto body = Packet{
@@ -51,18 +51,18 @@ auto send(Stack& stack, const u16 op, MacAddrRef eth_dst, MacAddrRef arp_target_
         .sender_ip  = stack.addr,
         .target_ip  = target_ip,
     };
-    noxx::memcpy(body.sender_mac.data, stack.netif->mac.data, MacAddr::size());
+    noxx::memcpy(body.sender_mac.data, stack.netif->get_mac_addr().data, MacAddr::size());
     noxx::memcpy(body.target_mac.data, arp_target_mac.data, MacAddr::size());
 
     auto packet = AutoPacket(packet_alloc(sizeof(EthernetHeader)));
-    ensure(packet.get() != nullptr);
-    unwrap(dst, packet->append(sizeof(body)));
+    co_ensure(packet.get() != nullptr);
+    co_unwrap(dst, packet->append(sizeof(body)));
     noxx::memcpy(&dst, &body, sizeof(body));
-    return stack.eth_send(eth_dst, EtherType::Arp, noxx::move(packet));
+    co_return co_await stack.eth_send(eth_dst, EtherType::Arp, noxx::move(packet));
 }
 
-auto send_request(Stack& stack, const IPv4Addr target_ip) -> bool {
-    return send(stack, Op::Request, broadcast, MacAddr{}, target_ip);
+auto send_request(Stack& stack, const IPv4Addr target_ip) -> coop::Async<bool> {
+    co_return co_await send(stack, Op::Request, broadcast, MacAddr{}, target_ip);
 }
 } // namespace
 
@@ -81,7 +81,7 @@ auto build_request(const MacAddrRef sender_mac, const IPv4Addr sender_ip, const 
     return ret;
 }
 
-auto cache(Stack& stack, const IPv4Addr ip, const MacAddrRef mac) -> void {
+auto cache(Stack& stack, const IPv4Addr ip, const MacAddrRef mac) -> coop::Async<void> {
     auto& table = stack.arp;
     auto  entry = find(table, ip);
     if(entry == nullptr) {
@@ -95,7 +95,7 @@ auto cache(Stack& stack, const IPv4Addr ip, const MacAddrRef mac) -> void {
     entry->last_used_ms = stack.now_ms;
     // flush a packet that was waiting on this resolution
     if(entry->pending.get() != nullptr) {
-        stack.eth_send(entry->mac, EtherType::IPv4, noxx::move(entry->pending));
+        co_await stack.eth_send(entry->mac, EtherType::IPv4, noxx::move(entry->pending));
     }
 }
 
@@ -107,21 +107,21 @@ auto lookup(Table& table, const IPv4Addr ip) -> noxx::Optional<MacAddr> {
     return noxx::Array(entry->mac);
 }
 
-auto resolve_and_send(Stack& stack, const IPv4Addr next_hop, AutoPacket packet) -> bool {
+auto resolve_and_send(Stack& stack, const IPv4Addr next_hop, AutoPacket packet) -> coop::Async<bool> {
     // limited broadcast needs no resolution
     if(next_hop == all_ones_ip) {
-        return stack.eth_send(broadcast, EtherType::IPv4, noxx::move(packet));
+        co_return co_await stack.eth_send(broadcast, EtherType::IPv4, noxx::move(packet));
     }
 
     auto& table = stack.arp;
     if(const auto entry = find(table, next_hop); entry != nullptr) {
         entry->last_used_ms = stack.now_ms;
         if(entry->state == State::Resolved) {
-            return stack.eth_send(entry->mac, EtherType::IPv4, noxx::move(packet));
+            co_return co_await stack.eth_send(entry->mac, EtherType::IPv4, noxx::move(packet));
         }
         // already requesting; hold the newest packet
         entry->pending = noxx::move(packet);
-        return true;
+        co_return true;
     }
 
     auto& entry        = *alloc(table);
@@ -132,27 +132,27 @@ auto resolve_and_send(Stack& stack, const IPv4Addr next_hop, AutoPacket packet) 
     entry.deadline_ms  = stack.now_ms + retry_interval_ms;
     entry.last_used_ms = stack.now_ms;
     entry.pending      = noxx::move(packet);
-    return send_request(stack, next_hop);
+    co_return co_await send_request(stack, next_hop);
 }
 
-auto input(Stack& stack, AutoPacket packet) -> void {
+auto input(Stack& stack, AutoPacket packet) -> coop::Async<void> {
     if(packet->len < sizeof(Packet)) {
-        return;
+        co_return;
     }
     const auto& body = *(const Packet*)packet->data();
     if(body.hw_type != noxx::byteswap(hw_type_ethernet) || body.proto_type != noxx::byteswap(EtherType::IPv4)) {
-        return;
+        co_return;
     }
 
     // learn the sender regardless of op
-    cache(stack, body.sender_ip, body.sender_mac);
+    co_await cache(stack, body.sender_ip, body.sender_mac);
 
     if(noxx::byteswap(body.op) == Op::Request && body.target_ip == stack.addr) {
-        send(stack, Op::Reply, body.sender_mac, body.sender_mac, body.sender_ip);
+        co_await send(stack, Op::Reply, body.sender_mac, body.sender_mac, body.sender_ip);
     }
 }
 
-auto tick(Stack& stack, const u64 now_ms) -> void {
+auto tick(Stack& stack, const u64 now_ms) -> coop::Async<void> {
     for(auto& entry : stack.arp.entries.data) {
         switch(entry.state) {
         case State::Free:
@@ -169,7 +169,7 @@ auto tick(Stack& stack, const u64 now_ms) -> void {
                 } else {
                     entry.retries += 1;
                     entry.deadline_ms = now_ms + retry_interval_ms;
-                    send_request(stack, entry.ip);
+                    co_await send_request(stack, entry.ip);
                 }
             }
             break;

@@ -49,33 +49,33 @@ auto checksum(const noxx::Span<const u8> data) -> u16 {
     return u16(~sum);
 }
 
-auto input(Stack& stack, const MacAddrRef src_mac, AutoPacket packet) -> void {
+auto input(Stack& stack, const MacAddrRef src_mac, AutoPacket packet) -> coop::Async<void> {
     if(packet->len < sizeof(Header)) {
-        return;
+        co_return;
     }
     const auto& header = *(const Header*)packet->data();
     if((header.version_ihl >> 4) != 4) {
-        return;
+        co_return;
     }
     const auto ihl = usize(header.version_ihl & 0x0f) * 4;
     if(ihl < sizeof(Header) || packet->len < ihl) {
-        return;
+        co_return;
     }
     if(checksum({packet->data(), ihl}) != 0) {
-        return; // corrupt header
+        co_return; // corrupt header
     }
 
     // learn the l2/l3 mapping from any inbound frame
-    arp::cache(stack, header.src, src_mac);
+    co_await arp::cache(stack, header.src, src_mac);
 
     // accept only frames addressed to us
     if(!(header.dst == stack.addr)) {
-        return;
+        co_return;
     }
 
     const auto total = usize(noxx::byteswap(header.total_len));
     if(total < ihl || total > packet->len) {
-        return;
+        co_return;
     }
     const auto src   = header.src;
     const auto proto = header.proto;
@@ -84,19 +84,19 @@ auto input(Stack& stack, const MacAddrRef src_mac, AutoPacket packet) -> void {
 
     switch(proto) {
     case Proto::Icmp:
-        icmp::input(stack, src, noxx::move(packet));
+        co_await icmp::input(stack, src, noxx::move(packet));
         break;
     default:
         break; // udp/tcp arrive in later phases
     }
 }
 
-auto output(Stack& stack, const IPv4Addr dst, const u8 proto, AutoPacket packet) -> bool {
+auto output(Stack& stack, const IPv4Addr dst, const u8 proto, AutoPacket packet) -> coop::Async<bool> {
     constexpr auto error_value = false;
 
     const auto payload = packet->len;
     const auto raw     = packet->prepend(sizeof(Header));
-    ensure(raw != nullptr, "no headroom for ipv4 header");
+    co_ensure(raw != nullptr, "no headroom for ipv4 header");
 
     auto& header       = *(Header*)raw;
     header             = Header{};
@@ -111,6 +111,6 @@ auto output(Stack& stack, const IPv4Addr dst, const u8 proto, AutoPacket packet)
     header.checksum    = noxx::byteswap(checksum({raw, sizeof(Header)}));
 
     const auto next_hop = stack.on_link(dst) ? dst : stack.gateway;
-    return arp::resolve_and_send(stack, next_hop, noxx::move(packet));
+    co_return co_await arp::resolve_and_send(stack, next_hop, noxx::move(packet));
 }
 } // namespace net::ipv4
