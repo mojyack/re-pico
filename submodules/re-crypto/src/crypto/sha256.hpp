@@ -1,7 +1,7 @@
 #pragma once
 #include <noxx/array.hpp>
 
-#include "util.hpp"
+#include <noxx/bytes-alias.hpp>
 
 namespace crypto {
 struct Sha256 {
@@ -24,3 +24,5 @@ struct Sha256 {
 
 auto sha256(noxx::Span<const u8> data, Sha256::DigestMutRef digest) -> void;
 } // namespace crypto
+
+#include <noxx/bytes-alias.hpp>

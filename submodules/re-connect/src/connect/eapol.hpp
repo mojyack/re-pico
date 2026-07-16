@@ -1,12 +1,13 @@
 #pragma once
 #include <crypto/rng.hpp>
-#include <crypto/util.hpp>
 #include <noxx/array.hpp>
 #include <noxx/optional.hpp>
 #include <noxx/span.hpp>
 
 #include "dot1x.hpp"
 #include "mac-addr.hpp"
+
+#include <noxx/bytes-alias.hpp>
 
 // RSN 4-way handshake supplicant for AKM SAE (00-0F-AC:8): PTK derivation,
 // EAPOL-Key MIC (AES-CMAC) and key-data unwrap (AES key wrap), and GTK/IGTK
@@ -105,3 +106,5 @@ struct Supplicant {
     auto on_frame(noxx::Span<const u8> in, noxx::Span<u8> out) -> usize;
 };
 } // namespace connect::eapol
+
+#include <noxx/bytes-alias.hpp>

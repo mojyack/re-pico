@@ -1,7 +1,7 @@
 #pragma once
 #include <noxx/array.hpp>
 
-#include "util.hpp"
+#include <noxx/bytes-alias.hpp>
 
 namespace crypto {
 struct Aes128 {
@@ -18,3 +18,5 @@ struct Aes128 {
     Aes128(KeyRef key);
 };
 } // namespace crypto
+
+#include <noxx/bytes-alias.hpp>

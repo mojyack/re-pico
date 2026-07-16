@@ -5,6 +5,8 @@
 
 #include "mac-addr.hpp"
 
+#include <noxx/bytes-alias.hpp>
+
 // SAE (Simultaneous Authentication of Equals) for WPA3, group 19 (P-256),
 // hash-to-element PWE only (sae_pwe=1). Ref IEEE 802.11-2020 12.4 and
 // hostap/src/common/sae.c. The caller (halow) wraps these payloads in 802.11
@@ -67,3 +69,5 @@ struct Session {
     auto verify_confirm(noxx::Span<const u8> payload) const -> bool;
 };
 } // namespace connect::sae
+
+#include <noxx/bytes-alias.hpp>
