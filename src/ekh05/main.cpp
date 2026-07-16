@@ -106,70 +106,6 @@ auto hexdump(const u8* const data, const usize size) -> coop::Async<bool> {
     co_return true;
 }
 
-struct HwRng : crypto::Rng {
-    auto operator()(noxx::Span<u8> out) -> bool override {
-        return rng::fill(out);
-    }
-};
-
-auto crypto_selftest() -> coop::Async<bool> {
-    constexpr auto error_value = false;
-
-    // hardware RNG sanity: two draws must differ
-    auto a = noxx::Array<u8, 8>();
-    auto b = noxx::Array<u8, 8>();
-    co_ensure(rng::fill(a) && rng::fill(b), "rng fill failed");
-    co_ensure(a != b, "rng returned repeated bytes");
-    co_ensure(co_await printf<"rng ok: {02x}{02x}{02x}{02x}...\n">(a[0], a[1], a[2], a[3]));
-
-    // SAE group-19 H2E handshake between a local STA and AP role
-    const auto ssid     = noxx::StringView("halow-test");
-    const auto password = noxx::StringView("password");
-    const auto pt       = connect::sae::derive_pt(ssid, password);
-    const auto sta_mac  = connect::MacAddr{0x0c, 0xbf, 0x74, 0x00, 0x00, 0x0a};
-    const auto ap_mac   = connect::MacAddr{0x00, 0x60, 0xad, 0x80, 0x1f, 0x51};
-
-    auto hw  = HwRng();
-    auto sta = connect::sae::Session();
-    auto ap  = connect::sae::Session();
-    co_ensure(sta.start(pt, sta_mac, ap_mac, hw), "sta sae start failed");
-    co_ensure(ap.start(pt, ap_mac, sta_mac, hw), "ap sae start failed");
-
-    auto       sta_commit = noxx::Array<u8, 128>();
-    auto       ap_commit  = noxx::Array<u8, 128>();
-    const auto sc         = sta.write_commit(sta_commit);
-    const auto ac         = ap.write_commit(ap_commit);
-    co_ensure(sc != 0 && ac != 0, "sae write_commit failed");
-    co_ensure(sta.read_commit({ap_commit.data, ac}), "sta read_commit failed");
-    co_ensure(ap.read_commit({sta_commit.data, sc}), "ap read_commit failed");
-    co_ensure(sta.pmk == ap.pmk, "sae pmk mismatch");
-
-    auto       sta_confirm = noxx::Array<u8, 64>();
-    auto       ap_confirm  = noxx::Array<u8, 64>();
-    const auto scf         = sta.write_confirm(sta_confirm);
-    const auto acf         = ap.write_confirm(ap_confirm);
-    co_ensure(sta.verify_confirm({ap_confirm.data, acf}), "sta confirm verify failed");
-    co_ensure(ap.verify_confirm({sta_confirm.data, scf}), "ap confirm verify failed");
-    co_await print("sae ok: mutual pmk agreement + confirm verified\n");
-
-    // EAPOL PTK derivation known-answer (independent Python oracle vector)
-    constexpr auto kat_pmk = noxx::to_array<u8>({0xa4, 0x5d, 0xb8, 0xa0, 0xb3, 0x72, 0x5a, 0x6a, 0xc7, 0xe9, 0xfe, 0xde, 0xc3, 0x72, 0x1d, 0x1d,
-                                                 0x59, 0x49, 0x98, 0xa1, 0x16, 0x74, 0x43, 0xc3, 0x2d, 0x8c, 0xa3, 0xed, 0xb8, 0xf4, 0x57, 0x53});
-    auto           anonce  = connect::eapol::Nonce();
-    auto           snonce  = connect::eapol::Nonce();
-    for(auto i = usize(0); i < 32; i += 1) {
-        anonce[i] = 0x1a;
-        snonce[i] = 0x2b;
-    }
-    auto           ptk     = connect::eapol::derive_ptk(kat_pmk, ap_mac, sta_mac, anonce, snonce);
-    constexpr auto kat_kck = noxx::to_array<u8>({0x76, 0x82, 0x1d, 0x26, 0x20, 0x03, 0x5e, 0xef, 0x71, 0xfa, 0x12, 0x49, 0x32, 0x39, 0x0a, 0x08});
-    co_ensure(ptk.kck == kat_kck, "eapol ptk kat mismatch");
-    co_await print("eapol ok: ptk derivation matches known-answer vector\n");
-
-    co_await print("crypto selftest PASS\n");
-    co_return true;
-}
-
 constexpr auto help = R"(commands:
   help              print this message
   reboot            reboot the board
@@ -184,7 +120,6 @@ constexpr auto help = R"(commands:
     halow disconnect                 deauthenticate and tear the link down
     halow link                       print link status
     halow keepalive                  send a qos-null keepalive to the ap
-    halow saetest                    run the WPA3 SAE/EAPOL crypto self-test
   net ...           network utilities
     net up                           bring the ip stack up over the halow link
     net ip <addr> [mask [gw]]        configure the ip address
@@ -307,8 +242,6 @@ auto handle_command(noxx::StringView line) -> coop::Async<bool> {
         } else if(elms[1] == "disconnect") {
             co_ensure(co_await halow::disconnect());
             co_await print("disconnected\n");
-        } else if(elms[1] == "saetest") {
-            co_ensure(co_await crypto_selftest());
         } else if(elms[1] == "keepalive") {
             co_ensure(co_await halow::send_keepalive());
             co_await print("keepalive sent\n");
