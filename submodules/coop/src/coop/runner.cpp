@@ -1,7 +1,9 @@
 #include <hal/time.hpp>
 
 #include "io-pre.hpp"
+#include "multi-event-pre.hpp"
 #include "runner-pre.hpp"
+#include "single-event-pre.hpp"
 
 #include <noxx/assert.hpp>
 
@@ -139,6 +141,19 @@ auto Runner::destroy_task(Task& task) -> bool {
         auto& r         = task.suspend_reason.as<ByIO>();
         r.event->waiter = nullptr;
     } break;
+    case SuspendReason::index_of<BySingleEvent>: {
+        auto& r         = task.suspend_reason.as<BySingleEvent>();
+        r.event->waiter = nullptr;
+    } break;
+    case SuspendReason::index_of<ByMultiEvent>: {
+        auto& waiters = task.suspend_reason.as<ByMultiEvent>().event->waiters;
+        for(auto i = usize(0); i < waiters.size(); i += 1) {
+            if(waiters[i] == &task) {
+                impl::erase_at(waiters, i);
+                break;
+            }
+        }
+    } break;
     }
 
     if(task.user_handle != nullptr) {
@@ -205,6 +220,33 @@ auto Runner::delay(const u64 duration_us) -> void {
 auto Runner::io_wait(IOEvent& event) -> void {
     event.waiter = current_task;
     current_task->suspend_reason.emplace<ByIO>(&event);
+}
+
+auto Runner::event_wait(SingleEvent& event) -> void {
+    current_task->suspend_reason.emplace<BySingleEvent>(&event);
+    event.waiter = current_task;
+}
+
+auto Runner::event_notify(SingleEvent& event) -> void {
+    event.waiter->suspend_reason = {};
+    event.waiter                 = nullptr;
+}
+
+auto Runner::event_wait(MultiEvent& event) -> void {
+    current_task->suspend_reason.emplace<ByMultiEvent>(&event);
+    event.waiters.append(current_task);
+}
+
+auto Runner::event_notify(MultiEvent& event, usize n) -> void {
+    auto& waiters = event.waiters;
+    n             = (n == 0 || n > waiters.size()) ? waiters.size() : n;
+    for(auto i = usize(0); i < n; i += 1) {
+        waiters[i]->suspend_reason = {};
+    }
+    for(auto i = n; i < waiters.size(); i += 1) {
+        waiters[i - n] = waiters[i];
+    }
+    waiters.resize(waiters.size() - n);
 }
 
 auto Runner::run() -> bool {

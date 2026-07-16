@@ -2,4 +2,10 @@
 /tools/crc/crc
 /tools/crc/submodules
 /tools/uf2
+/.gitignore
+/CLAUDE.md
+/ROADMAP.md
+/docs
+/ref
+/stm32-env.sh
 !/submodules

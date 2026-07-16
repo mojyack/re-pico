@@ -9,7 +9,6 @@ namespace coop {
 struct PromiseBase {
     Runner* runner = nullptr;
 
-    // coroutine frames are allocated from the noxx heap
     static auto operator new(const usize size) -> void* {
         return noxx::malloc(size);
     }
