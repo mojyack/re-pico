@@ -1,6 +1,5 @@
 #include <inflate.hpp>
 #include <noxx/array.hpp>
-#include <noxx/assert.hpp>
 #include <noxx/bits.hpp>
 #include <print.hpp>
 #include <uart.hpp>
@@ -13,6 +12,8 @@
 #include "hw/usart.hpp"
 #include "system.hpp"
 
+#include <noxx/assert.hpp>
+
 // from link-boot.ld
 extern "C" void* vector[];
 extern u32       bss_start;
@@ -24,9 +25,9 @@ extern u32       stack_top;
 
 namespace {
 constexpr auto fw_load_base  = usize(0x20000000);
-constexpr auto fw_load_size  = usize(448 * 1024);
-constexpr auto comp_buf_base = usize(0x20070000);
-constexpr auto comp_buf_size = usize(288 * 1024);
+constexpr auto fw_load_size  = usize(400 * 1024);
+constexpr auto comp_buf_base = usize(0x20064000);
+constexpr auto comp_buf_size = usize(336 * 1024);
 static_assert(fw_load_base + fw_load_size == comp_buf_base);
 static_assert(comp_buf_base + comp_buf_size == 0x200b8000); // = ORIGIN(sram) of link-boot.ld
 
@@ -44,7 +45,7 @@ auto get_u8() -> u8 {
 
 auto crc32(noxx::Span<u8> buf) -> u32 {
     auto crc = u32(0xffffffff);
-    for(auto i = u32(0); i < buf.size; i += 1) {
+    for(auto i = u32(0); i < buf.size(); i += 1) {
         crc ^= buf[i];
         for(auto k = u32(0); k < 8; k += 1) {
             crc = (crc >> 1) ^ (u32(0xedb88320) & (~(crc & 1) + 1)); // reflected CRC-32 poly
