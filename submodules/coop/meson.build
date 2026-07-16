@@ -11,8 +11,7 @@ add_project_arguments(
     language: 'cpp',
 )
 
-# tests/include supplies the host hal/time.hpp shim
-inc = include_directories('src', 'tests/include')
+inc = include_directories('src')
 
 coop_files = files(
     'src/coop/runner.cpp',
@@ -28,7 +27,10 @@ coop_lib = static_library(
     include_directories: inc,
 )
 
-support_files = files('tests/noxx-support.cpp')
+support_files = files(
+    'submodules/nolibc++/tests/noxx-support.cpp',
+    'tests/coop-support.cpp',
+)
 
 foreach name : [
     'coop',

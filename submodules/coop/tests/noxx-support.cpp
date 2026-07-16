@@ -1,8 +1,6 @@
 #include <memory.h>
 #include <stdio.h>
 
-#include <hal/time.hpp>
-
 #include "noxx/int.hpp"
 
 namespace noxx {
@@ -23,17 +21,3 @@ auto memcmp(const void* a, const void* b, usize size) -> int {
     return ::memcmp(a, b, size);
 }
 } // namespace noxx
-
-namespace time {
-auto counter = u64(0);
-
-auto now() -> u64 {
-    return counter += 1;
-}
-
-auto delay(const u64 us) -> void {
-    const auto until = now() + us;
-    while(now() < until) {
-    }
-}
-} // namespace time

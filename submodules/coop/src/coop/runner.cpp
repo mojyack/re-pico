@@ -1,7 +1,6 @@
-#include <hal/time.hpp>
-
 #include "io-pre.hpp"
 #include "multi-event-pre.hpp"
+#include "platform.hpp"
 #include "runner-pre.hpp"
 #include "single-event-pre.hpp"
 
@@ -214,7 +213,7 @@ auto Runner::join(TaskHandle& handle) -> bool {
 }
 
 auto Runner::delay(const u64 duration_us) -> void {
-    current_task->suspend_reason.emplace<ByTimer>(time::now() + duration_us);
+    current_task->suspend_reason.emplace<ByTimer>(now_us() + duration_us);
 }
 
 auto Runner::io_wait(IOEvent& event) -> void {
@@ -271,7 +270,7 @@ loop:
 
     any_io_event_available = false;
 
-    auto result = GatheringResult{.now = time::now()};
+    auto result = GatheringResult{.now = now_us()};
     ensure(gather_resumable_tasks(root, result));
 
     if(running_tasks.size() > 0) {
@@ -280,14 +279,12 @@ loop:
     }
 
     if(result.poll_io) {
-        while(time::now() < result.wake && !any_io_event_available) {
+        while(now_us() < result.wake && !any_io_event_available) {
             // idle until the next timer expires or io events
         }
     } else {
         ensure(result.wake != u64(-1), "deadlock, no resumable task");
-        while(time::now() < result.wake) {
-            // idle until the next timer expires
-        }
+        sleep_until(result.wake);
     }
     goto loop;
 }

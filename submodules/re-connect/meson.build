@@ -34,7 +34,7 @@ connect_lib = static_library(
     include_directories: inc,
 )
 
-support_files = files('tests/noxx-support.cpp')
+support_files = files('submodules/nolibc++/tests/noxx-support.cpp')
 
 foreach name : [
     'sae',

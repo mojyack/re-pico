@@ -1,5 +1,4 @@
 #pragma once
-#include <hal/time.hpp>
 #include <noxx/malloc.hpp>
 #include <noxx/optional.hpp>
 #include <noxx/type-traits.hpp>

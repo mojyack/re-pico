@@ -12,4 +12,12 @@ auto console_out(const char* ptr) -> bool {
 auto memcpy(void* dest, const void* src, usize size) -> void {
     ::memcpy(dest, src, size);
 }
+
+auto memset(void* a, u8 c, usize size) -> void {
+    ::memset(a, c, size);
+}
+
+auto memcmp(const void* a, const void* b, usize size) -> int {
+    return ::memcmp(a, b, size);
+}
 } // namespace noxx

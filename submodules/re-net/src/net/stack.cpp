@@ -1,3 +1,5 @@
+#include <coop/platform.hpp>
+#include <coop/timer.hpp>
 #include <noxx/endian.hpp>
 
 #include "arp.hpp"
@@ -8,8 +10,14 @@
 #include <noxx/assert.hpp>
 
 namespace net {
+namespace {
+// how often timer_task() ticks the protocol timers. arp retries at 1 s and ages
+// at 60 s, so a coarse period keeps overhead low without missing deadlines.
+constexpr auto timer_period_ms = u64(250);
+} // namespace
+
 auto Stack::on_rx(NetIf& netif, AutoPacket packet) -> void {
-    // enqueue only; the frame is processed later on the dispatch loop
+    // enqueue and wake run(); the frame is demuxed later on its loop
     auto&      self = *(Stack*)netif.stack;
     const auto raw  = packet.release();
     raw->next       = nullptr;
@@ -19,6 +27,22 @@ auto Stack::on_rx(NetIf& netif, AutoPacket packet) -> void {
         self.rx_tail->next = raw;
     }
     self.rx_tail = raw;
+    self.rx_event.notify();
+}
+
+auto Stack::run() -> coop::Async<void> {
+    while(true) {
+        while(dispatch()) {
+        }
+        co_await rx_event;
+    }
+}
+
+auto Stack::timer_task() -> coop::Async<void> {
+    while(true) {
+        co_await coop::sleep_ms(timer_period_ms);
+        tick(coop::now_us() / 1000);
+    }
 }
 
 auto Stack::init(NetIf& netif) -> void {

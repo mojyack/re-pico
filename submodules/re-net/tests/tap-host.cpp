@@ -1,32 +1,34 @@
-// linux host harness (phase n0): bridges a tap device into net::Stack and
-// hexdumps every received frame.
+// linux host harness: bridges a tap device into net::Stack and drives it with
+// coop, mirroring the on-board embedding (rx loop + timer task on one Runner).
 //
 //   sudo ip tuntap add mode tap user $USER name tap0
 //   sudo ip link set tap0 up
 //   sudo ip addr add 192.168.7.1/24 dev tap0
-//   ./build/tap-host tap0 192.168.7.2
+//   ./build/tap-host tap0 192.168.7.2 [192.168.7.1]
 //
-// then send traffic from the peer, e.g. `ping 192.168.7.2`
+// then send traffic from the peer, e.g. `ping 192.168.7.2`; the optional third
+// argument makes the board ping that address once a second.
 #include <fcntl.h>
 #include <linux/if.h>
 #include <linux/if_tun.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/ioctl.h>
-#include <sys/select.h>
-#include <time.h>
 #include <unistd.h>
 
+#include <coop/platform.hpp>
+#include <coop/promise.hpp>
+#include <coop/runner.hpp>
+#include <coop/timer.hpp>
 #include <net/icmp.hpp>
 #include <net/stack.hpp>
 
 #include <noxx/assert.hpp>
+#include <noxx/malloc.hpp>
 
 namespace {
 auto now_ms() -> u64 {
-    auto ts = timespec();
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return u64(ts.tv_sec) * 1000 + u64(ts.tv_nsec) / 1000000;
+    return coop::now_us() / 1000;
 }
 
 auto hexdump(const noxx::Span<const u8> data) -> void {
@@ -39,7 +41,7 @@ auto hexdump(const noxx::Span<const u8> data) -> void {
     }
 }
 
-// NetIf backed by a tap file descriptor
+// NetIf backed by a non-blocking tap file descriptor
 struct TapNetIf {
     net::NetIf netif;
     int        fd = -1;
@@ -55,7 +57,7 @@ struct TapNetIf {
     auto init(const char* const name) -> bool {
         constexpr auto error_value = false;
 
-        fd = open("/dev/net/tun", O_RDWR);
+        fd = open("/dev/net/tun", O_RDWR | O_NONBLOCK);
         ensure(fd >= 0, "cannot open /dev/net/tun");
 
         auto ifr      = ifreq();
@@ -70,20 +72,37 @@ struct TapNetIf {
         return true;
     }
 
-    // read one frame from the tap into a fresh packet; null on failure
+    // read one frame from the tap into a fresh packet; null if none pending
+    // (EAGAIN on the non-blocking fd is the normal idle case, not an error)
     auto rx_pop() -> net::Packet* {
         constexpr auto error_value = nullptr;
 
         auto packet = net::AutoPacket(net::packet_alloc());
         ensure(packet.get() != nullptr);
         const auto n = read(fd, packet->buf, net::packet_capacity);
-        ensure(n > 0, "tap read failed");
+        if(n <= 0) {
+            return nullptr;
+        }
         packet->head = 0;
         packet->len  = u16(n);
         return packet.release();
     }
 };
-} // namespace
+
+// pump the tap fd into the stack: non-blocking reads, yielding when idle. this
+// stands in for the board's interrupt-driven driver rx task.
+auto reader_task(TapNetIf& tap) -> coop::Async<void> {
+    while(true) {
+        auto packet = net::AutoPacket(tap.rx_pop());
+        if(packet.get() == nullptr) {
+            co_await coop::sleep_ms(1);
+            continue;
+        }
+        printf("rx %u bytes\n", unsigned(packet->len));
+        hexdump({packet->data(), packet->len});
+        tap.netif.rx(tap.netif, noxx::move(packet));
+    }
+}
 
 // outbound ping state: send times keyed by low sequence byte
 auto ping_sent_at = noxx::Array<u64, 256>();
@@ -94,11 +113,27 @@ auto on_echo_reply(net::Stack& /*self*/, const net::IPv4Addr src, const u16 id, 
            src[0], src[1], src[2], src[3], id, seq, data.size(), (unsigned long long)rtt);
 }
 
+auto ping_task(net::Stack& stack, const net::IPv4Addr target) -> coop::Async<void> {
+    const auto id  = u16(0xbeef);
+    auto       seq = u16(0);
+    while(true) {
+        ping_sent_at[seq & 0xff] = now_ms();
+        if(!net::icmp::send_echo(stack, target, id, seq, 32)) {
+            printf("ping: send failed (packet pool?)\n");
+        }
+        seq += 1;
+        co_await coop::sleep_ms(1000);
+    }
+}
+} // namespace
+
 auto main(const int argc, const char* const argv[]) -> int {
     constexpr auto error_value = 1;
 
     ensure(argc >= 2, "usage: tap-host TAPDEV [IPADDR [PINGTARGET]]");
 
+    static auto heap = noxx::Array<u8, 1 << 20>(); // coop task/frame allocations
+    noxx::set_heap(heap.data, heap.size());
     net::packet_pool_init();
 
     auto tap = TapNetIf();
@@ -112,46 +147,19 @@ auto main(const int argc, const char* const argv[]) -> int {
         stack.netmask = {255, 255, 255, 0};
     }
 
-    // optional outbound ping target: send one echo request per second
-    auto ping_target = net::IPv4Addr();
-    auto pinging     = false;
+    auto runner = coop::Runner();
+    ensure(runner.push_task(stack.run()));
+    ensure(runner.push_task(stack.timer_task()));
+    ensure(runner.push_task(reader_task(tap)));
+
+    // optional outbound ping target: one echo request per second
     if(argc >= 4) {
         unwrap(target, net::parse_ip(argv[3]));
-        ping_target              = target;
-        pinging                  = true;
         stack.on_icmp_echo_reply = on_echo_reply;
+        ensure(runner.push_task(ping_task(stack, target)));
     }
-    auto       ping_seq  = u16(0);
-    auto       next_ping = now_ms();
-    const auto ping_id   = u16(0xbeef);
 
     printf("tap-host: bridging %s, waiting for frames\n", argv[1]);
-    while(true) {
-        auto fds = fd_set();
-        FD_ZERO(&fds);
-        FD_SET(tap.fd, &fds);
-        auto       timeout = timeval{.tv_sec = 0, .tv_usec = 100 * 1000};
-        const auto r       = select(tap.fd + 1, &fds, nullptr, nullptr, &timeout);
-        ensure(r >= 0, "select failed");
-        if(r > 0) {
-            auto packet = net::AutoPacket(tap.rx_pop());
-            if(packet.get() != nullptr) {
-                printf("rx %u bytes\n", unsigned(packet->len));
-                hexdump({packet->data(), packet->len});
-                tap.netif.rx(tap.netif, noxx::move(packet));
-            }
-        }
-        while(stack.dispatch()) {
-        }
-        const auto now = now_ms();
-        stack.tick(now);
-        if(pinging && now >= next_ping) {
-            next_ping                     = now + 1000;
-            ping_sent_at[ping_seq & 0xff] = now;
-            if(!net::icmp::send_echo(stack, ping_target, ping_id, ping_seq, 32)) {
-                printf("ping: send failed (packet pool?)\n");
-            }
-            ping_seq += 1;
-        }
-    }
+    runner.run();
+    return 0;
 }

@@ -19,6 +19,8 @@ net_files = files(
     'src/net/ip.cpp',
     'src/net/packet.cpp',
     'src/net/stack.cpp',
+    # the stack is coop-driven; vendor coop's runtime alongside it
+    'src/coop/runner.cpp',
 )
 
 noxx_files = files(
@@ -33,7 +35,10 @@ net_lib = static_library(
     include_directories: inc,
 )
 
-support_files = files('tests/noxx-support.cpp')
+support_files = files(
+    'submodules/nolibc++/tests/noxx-support.cpp',
+    'submodules/coop/tests/coop-support.cpp',
+)
 
 foreach name : [
     'packet',

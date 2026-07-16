@@ -96,3 +96,15 @@ auto memcmp(const void* a, const void* b, usize size) -> int {
     return 0;
 }
 } // namespace noxx
+
+// coop support
+namespace coop {
+auto now_us() -> u64 {
+    return time::now();
+}
+
+auto sleep_until(u64 time) -> void {
+    while(time::now() < time) {
+    }
+}
+} // namespace coop

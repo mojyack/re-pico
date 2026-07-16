@@ -25,7 +25,7 @@ auto unreset(const u32 reset_num) -> void {
 auto enable_led() -> void {
     unreset(resets::ResetNum::IOBank0);
     IO_BANK0_REGS.status_control[led_pin].control = BF(iobank0::GPIOControl::FuncSelect, iobank0::GPIOControlFuncSelect::SIO);
-    SIO_REGS.gpio_out_en_set = 1 << led_pin;
+    SIO_REGS.gpio_out_en_set                      = 1 << led_pin;
 }
 
 auto led(const bool on) -> void {
@@ -70,5 +70,20 @@ auto console_out(const char* ptr) -> bool {
 
 auto memcpy(void* dest, const void* src, usize size) -> void {
     rom::memcpy((u8*)dest, (u8*)src, size);
+}
+
+auto memset(void* dest, const u8 c, usize size) -> void {
+    rom::memset((u8*)dest, c, size);
+}
+
+auto memcmp(const void* a, const void* b, usize size) -> int {
+    for(auto i = usize(0); i < size; i += 1) {
+        const auto x = ((const u8*)a)[i];
+        const auto y = ((const u8*)b)[i];
+        if(x != y) {
+            return x < y ? -1 : 1;
+        }
+    }
+    return 0;
 }
 } // namespace noxx
