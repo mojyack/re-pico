@@ -16,6 +16,7 @@
 #include <halow/scan.hpp>
 #include <halow/yaps.hpp>
 #include <net/arp.hpp>
+#include <net/dhcp.hpp>
 #include <net/ethernet.hpp>
 #include <net/icmp.hpp>
 #include <net/ip.hpp>
@@ -87,6 +88,7 @@ auto dump_task_tree(const coop::Task& task, const int indent = 0) -> void {
 
 auto halow_host_table = noxx::Optional<halow::HostTable>();
 auto netstack         = net::Stack();
+auto dhcp_client      = net::dhcp::Client();
 
 // icmp echo reply sink for `net ping`; runs in link_task context, so blocking i/o
 auto on_ping_reply(net::Stack& /*self*/, const net::IPv4Addr src, const u16 /*id*/, const u16 seq, const noxx::Span<const u8> data) -> void {
@@ -123,6 +125,7 @@ constexpr auto help = R"(commands:
   net ...           network utilities
     net up                           bring the ip stack up over the halow link
     net ip <addr> [mask [gw]]        configure the ip address
+    net dhcp                         acquire an address over dhcp (or print the lease)
     net ping <addr> [count]          send icmp echo requests
     net arp [ipv4]                   broadcast a who-has, or print the arp table
   mac               print halow mac address
@@ -283,7 +286,7 @@ auto handle_command(noxx::StringView line) -> coop::Async<bool> {
             co_ensure(false, "invalid halow command");
         }
     } else if(elms[0] == "net") {
-        co_ensure(elms.size() >= 2, "usage: net <up|ip|ping|arp>");
+        co_ensure(elms.size() >= 2, "usage: net <up|ip|dhcp|ping|arp>");
         if(elms[1] == "up") {
             co_ensure(halow::link_status().up, "not connected");
             // attaching the stack makes link_task deliver rx frames to it
@@ -308,6 +311,15 @@ auto handle_command(noxx::StringView line) -> coop::Async<bool> {
             const auto& a = netstack.addr;
             const auto& n = netstack.netmask;
             co_ensure(co_await printf<"ip {} netmask {}\n">(a, n));
+        } else if(elms[1] == "dhcp") {
+            co_ensure(netstack.netif != nullptr, "run net up first");
+            if(dhcp_client.state == net::dhcp::State::Idle) {
+                const auto runner = co_await coop::reveal_runner();
+                co_ensure(runner->push_task(dhcp_client.task(netstack)));
+                co_await print("dhcp started\n");
+            } else {
+                co_ensure(co_await printf<"dhcp state={} addr={} lease={}s\n">(u8(dhcp_client.state), netstack.addr, dhcp_client.lease.lease_s));
+            }
         } else if(elms[1] == "ping") {
             co_ensure(netstack.netif->is_up(), "run net up first");
             co_ensure(elms.size() >= 3, "usage: net ping <addr> [count]");
@@ -340,7 +352,7 @@ auto handle_command(noxx::StringView line) -> coop::Async<bool> {
                 }
             }
         } else {
-            co_ensure(false, "usage: net <up|ip|ping|arp>");
+            co_ensure(false, "usage: net <up|ip|dhcp|ping|arp>");
         }
     } else if(elms[0] == "mac") {
         co_ensure(halow_host_table, "run halow cmd first");

@@ -5,6 +5,7 @@
 #include "icmp.hpp"
 #include "ip.hpp"
 #include "stack.hpp"
+#include "udp.hpp"
 
 #include <noxx/assert.hpp>
 
@@ -65,11 +66,15 @@ auto input(Stack& stack, const MacAddrRef src_mac, AutoPacket packet) -> coop::A
         co_return; // corrupt header
     }
 
-    // learn the l2/l3 mapping from any inbound frame
-    co_await arp::cache(stack, header.src, src_mac);
+    // learn the l2/l3 mapping from any inbound frame (an unspecified source
+    // carries no mapping, e.g. a peer's dhcp discover)
+    if(!(header.src == ipv4_any)) {
+        co_await arp::cache(stack, header.src, src_mac);
+    }
 
-    // accept only frames addressed to us
-    if(!(header.dst == stack.addr)) {
+    // accept frames addressed to us or broadcast; while unconfigured, accept
+    // anything so a dhcp reply unicast to the offered address gets through
+    if(!(header.dst == stack.addr || header.dst == ipv4_broadcast || stack.addr == ipv4_any)) {
         co_return;
     }
 
@@ -78,6 +83,7 @@ auto input(Stack& stack, const MacAddrRef src_mac, AutoPacket packet) -> coop::A
         co_return;
     }
     const auto src   = header.src;
+    const auto dst   = header.dst;
     const auto proto = header.proto;
     packet->len      = u16(total);
     packet->consume(ihl);
@@ -86,8 +92,11 @@ auto input(Stack& stack, const MacAddrRef src_mac, AutoPacket packet) -> coop::A
     case Proto::Icmp:
         co_await icmp::input(stack, src, noxx::move(packet));
         break;
+    case Proto::Udp:
+        co_await udp::input(stack, src, dst, noxx::move(packet));
+        break;
     default:
-        break; // udp/tcp arrive in later phases
+        break; // tcp arrives in a later phase
     }
 }
 

@@ -12,6 +12,9 @@
 namespace net {
 bytes_alias(IPv4Addr, 4);
 
+constexpr auto ipv4_any       = IPv4Addr{};                       // unspecified (0.0.0.0)
+constexpr auto ipv4_broadcast = IPv4Addr{0xff, 0xff, 0xff, 0xff}; // limited broadcast
+
 struct Stack;
 
 auto parse_ip(noxx::StringView str) -> noxx::Optional<IPv4Addr>;

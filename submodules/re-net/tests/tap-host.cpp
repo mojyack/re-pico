@@ -7,7 +7,9 @@
 //   ./build/tap-host tap0 192.168.7.2 [192.168.7.1]
 //
 // then send traffic from the peer, e.g. `ping 192.168.7.2`; the optional third
-// argument makes the board ping that address once a second.
+// argument makes the board ping that address once a second. passing "dhcp" as
+// the address instead runs the dhcp client against a server on the tap, e.g.
+//   dnsmasq -d -i tap0 --bind-interfaces --dhcp-range=192.168.7.100,192.168.7.150,1h
 #include <fcntl.h>
 #include <linux/if.h>
 #include <linux/if_tun.h>
@@ -20,6 +22,7 @@
 #include <coop/promise.hpp>
 #include <coop/runner.hpp>
 #include <coop/timer.hpp>
+#include <net/dhcp.hpp>
 #include <net/icmp.hpp>
 #include <net/stack.hpp>
 
@@ -126,6 +129,27 @@ auto ping_task(net::Stack& stack, const net::IPv4Addr target) -> coop::Async<voi
         co_await coop::sleep_ms(1000);
     }
 }
+
+// announce dhcp state changes; the client task itself is silent
+auto dhcp_report_task(net::dhcp::Client& client, net::Stack& stack) -> coop::Async<void> {
+    auto last = net::dhcp::State::Idle;
+    while(true) {
+        if(client.state != last) {
+            last = client.state;
+            if(last == net::dhcp::State::Bound) {
+                const auto& a = stack.addr;
+                const auto& m = stack.netmask;
+                const auto& g = stack.gateway;
+                printf("dhcp bound: addr=%u.%u.%u.%u mask=%u.%u.%u.%u gw=%u.%u.%u.%u lease=%us\n",
+                       a[0], a[1], a[2], a[3], m[0], m[1], m[2], m[3], g[0], g[1], g[2], g[3],
+                       unsigned(client.lease.lease_s));
+            } else {
+                printf("dhcp state=%u\n", unsigned(last));
+            }
+        }
+        co_await coop::sleep_ms(100);
+    }
+}
 } // namespace
 
 auto main(const int argc, const char* const argv[]) -> int {
@@ -142,15 +166,22 @@ auto main(const int argc, const char* const argv[]) -> int {
 
     auto stack = net::Stack();
     stack.init(tap);
-    if(argc >= 3) {
-        unwrap(addr, net::parse_ip(argv[2]));
-        stack.addr    = addr;
-        stack.netmask = {255, 255, 255, 0};
-    }
 
     auto runner = coop::Runner();
     ensure(runner.push_task(stack.timer_task()));
     ensure(runner.push_task(reader_task(tap)));
+
+    static auto dhcp_client = net::dhcp::Client();
+    if(argc >= 3) {
+        if(strcmp(argv[2], "dhcp") == 0) {
+            ensure(runner.push_task(dhcp_client.task(stack)));
+            ensure(runner.push_task(dhcp_report_task(dhcp_client, stack)));
+        } else {
+            unwrap(addr, net::parse_ip(argv[2]));
+            stack.addr    = addr;
+            stack.netmask = {255, 255, 255, 0};
+        }
+    }
 
     // optional outbound ping target: one echo request per second
     if(argc >= 4) {

@@ -15,10 +15,12 @@ inc = include_directories('src')
 
 net_files = files(
     'src/net/arp.cpp',
+    'src/net/dhcp.cpp',
     'src/net/icmp.cpp',
     'src/net/ip.cpp',
     'src/net/packet.cpp',
     'src/net/stack.cpp',
+    'src/net/udp.cpp',
     # the stack is coop-driven; vendor coop's runtime alongside it
     'src/coop/runner.cpp',
 )
