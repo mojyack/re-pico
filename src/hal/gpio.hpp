@@ -18,6 +18,7 @@ enum class Pull : u8 {
 };
 
 auto set(const Line& line, bool value) -> void;
+auto get(const Line& line) -> bool;
 auto configure(const Line& line, Mode mode) -> void;
 auto configure(const Line& line, Pull pull) -> void;
 } // namespace gpio

@@ -32,6 +32,27 @@ struct Cmd {
 constexpr auto tkn_start_block   = u8(0xFE); // read data / single block write
 constexpr auto tkn_data_accepted = u8(0xE5);
 
+// CCCR (function 0) registers, reached via CMD52 (ref transport/sdio_spi.c)
+struct Cccr {
+    enum : u32 {
+        IntEnable  = 0x04,
+        BusControl = 0x07,
+    };
+};
+
+struct CccrIntEnable {
+    enum : u8 {
+        Master = 1 << 0,
+        Func1  = 1 << 1,
+    };
+};
+
+struct CccrBusControl {
+    enum : u8 {
+        ContinuousSpiInt = 1 << 5, // keep the irq line asserted while anything is pending
+    };
+};
+
 // CMD52/CMD53 argument encoding
 constexpr auto arg_write      = u32(1) << 31;
 constexpr auto arg_func1      = u32(1) << 28;
@@ -156,6 +177,15 @@ auto cmd52_write(const u32 address, const u8 data, const u32 func) -> bool {
     return sdio_cmd(Cmd::RWDirect, arg_write | func | address << arg_addr_bits | data);
 }
 
+auto cmd52_read(const u32 address, const u32 func, u8& data) -> bool {
+    constexpr auto error_value = false;
+
+    auto rsp = u32(0);
+    ensure(sdio_cmd(Cmd::RWDirect, func | address << arg_addr_bits, &rsp));
+    data = u8(rsp);
+    return true;
+}
+
 // data phase after a CMD53 read command. block mode transfers `count` blocks of
 // `block` bytes each (every block has its own start token and crc); byte mode
 // (block == 0) transfers a single run of `count` bytes. mirrors morselib
@@ -251,6 +281,10 @@ auto set_window(const u32 address, const u32 func) -> bool {
     return true;
 }
 } // namespace
+
+auto ChipIrqEvent::available() const -> bool {
+    return !gpio::get(get_gpio_line(Pin::Irq)); // active low
+}
 
 auto read_u32(const u32 address) -> noxx::Optional<u32> {
     constexpr auto error_value = noxx::nullopt;
@@ -388,6 +422,12 @@ auto init() -> coop::Async<bool> {
         if(sdio_cmd(Cmd::MorseStartup, 0)) {
             // the chip swallows the first command after startup, kick it with a dummy read
             sdio_cmd(Cmd::RWDirect, arg_func1 | reg_window_low << arg_addr_bits);
+            // route interrupts to the irq pin: master+func1 enable, and keep
+            // the line asserted while anything is pending (ref sdio_spi.c)
+            co_ensure(cmd52_write(Cccr::IntEnable, CccrIntEnable::Master | CccrIntEnable::Func1, 0));
+            auto bus_control = u8(0);
+            co_ensure(cmd52_read(Cccr::BusControl, 0, bus_control));
+            co_ensure(cmd52_write(Cccr::BusControl, bus_control | CccrBusControl::ContinuousSpiInt, 0));
             co_return true;
         }
         sdio_cmd(Cmd::GoIdle, 0);

@@ -1,5 +1,5 @@
 #include <coop/platform.hpp>
-#include <coop/select.hpp>
+#include <coop/single-event.hpp>
 #include <coop/timer.hpp>
 #include <noxx/endian.hpp>
 
@@ -144,14 +144,6 @@ auto on_socket_rx(Stack& stack, udp::Socket& socket, const IPv4Addr /*src*/, con
     client.reply.notify();
 }
 
-auto wait_event(coop::SingleEvent& event) -> coop::Async<void> {
-    co_await event;
-}
-
-auto sleep_task(const u64 ms) -> coop::Async<void> {
-    co_await coop::sleep_ms(ms);
-}
-
 // send one message per attempt until a state-advancing reply arrives
 auto transact(Client& client, Stack& stack, const u8 type) -> coop::Async<bool> {
     constexpr auto error_value = false;
@@ -160,7 +152,7 @@ auto transact(Client& client, Stack& stack, const u8 type) -> coop::Async<bool> 
         client.reply_type = 0;
         client.reply      = coop::SingleEvent(); // drop any stale notification
         co_ensure(co_await send_message(client, stack, type));
-        if(co_await coop::select(wait_event(client.reply), sleep_task(reply_timeout_ms)) == 0) {
+        if(co_await coop::wait_for_event(client.reply, reply_timeout_ms * 1000)) {
             co_return true;
         }
     }

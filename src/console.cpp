@@ -1,5 +1,5 @@
 #include <console.hpp>
-#include <coop/io.hpp>
+#include <coop/ext-event.hpp>
 #include <coop/promise.hpp>
 #include <hal/uart.hpp>
 #include <print.hpp>
@@ -12,7 +12,7 @@ auto read_line() -> coop::Async<noxx::Optional<noxx::String>> {
 
     auto line = noxx::String();
 loop:
-    co_ensure(co_await coop::wait_for_io(uart::read_event));
+    co_ensure(co_await coop::wait_for_event(uart::read_event) == coop::EventResult::Ok);
     auto c = u8();
     co_ensure(uart::read({&c, 1}) == 1);
     switch(c) {

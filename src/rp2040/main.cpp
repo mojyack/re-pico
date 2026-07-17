@@ -1,5 +1,5 @@
 #include <console.hpp>
-#include <coop/io.hpp>
+#include <coop/ext-event.hpp>
 #include <coop/promise.hpp>
 #include <coop/task-handle.hpp>
 #include <coop/timer.hpp>

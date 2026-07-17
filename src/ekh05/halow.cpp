@@ -1,12 +1,17 @@
+#include <coop/ext-event.hpp>
 #include <hal/time.hpp>
-#include <noxx/assert.hpp>
 #include <noxx/bits.hpp>
 
+#include "../halow/halow.hpp"
 #include "../halow/platform.hpp"
 #include "hal/gpio.hpp"
+#include "hw/exti.hpp"
 #include "hw/gpio.hpp"
+#include "hw/nvic.hpp"
 #include "hw/rcc.hpp"
 #include "hw/spi.hpp"
+
+#include <noxx/assert.hpp>
 
 namespace {
 const gpio::Line lines[] = {
@@ -33,6 +38,21 @@ auto prepare_pins_for_halow() -> bool {
 
     // enable gpio pins and clocks
     RCC_REGS.ahb2_enable1 |= hw::rcc::AHB2Enable1::GPIOB | hw::rcc::AHB2Enable1::GPIOD | hw::rcc::AHB2Enable1::GPIOE;
+
+    // route the chip irq line (PB15, active low) to EXTI15 on the falling edge.
+    // the line is level-asserted; halow::ChipIrqEvent::available() samples the
+    // pin, the edge interrupt only kicks the runner out of its idle loop
+    const auto pin_irq = lines[u8(halow::Pin::Irq)].pin;
+
+    EXTI_REGS.ext_int_select[pin_irq / 4] = (EXTI_REGS.ext_int_select[pin_irq / 4] & ~hw::exti::port_mask(pin_irq)) |
+                                            hw::exti::port(pin_irq, hw::exti::Port::B);
+    EXTI_REGS.falling_trigger |= 1 << pin_irq;
+    EXTI_REGS.falling_pending = 1 << pin_irq;
+    EXTI_REGS.int_mask |= 1 << pin_irq;
+
+    constexpr auto exti15_irq             = u32(hw::nvic::IRQ::Exti15);
+    NVIC_REGS.set_enable[exti15_irq / 32] = 1 << (exti15_irq % 32);
+
     RCC_REGS.apb1_enable1 |= hw::rcc::APB1Enable1::SPI2;
     RCC_REGS.clock_config1 = (RCC_REGS.clock_config1 & ~hw::rcc::ClockConfig1::SPI2Source) |
                              BF(hw::rcc::ClockConfig1::SPI2Source, hw::rcc::ClockConfig1SPI2Source::SysClk);
@@ -72,4 +92,9 @@ auto prepare_pins_for_halow() -> bool {
     }
     ensure(false); // spi stuck in mode fault
     return false;
+}
+
+extern "C" auto exti15_handler() -> void {
+    EXTI_REGS.falling_pending = 1 << lines[u8(halow::Pin::Irq)].pin;
+    halow::chip_irq_event.notify();
 }

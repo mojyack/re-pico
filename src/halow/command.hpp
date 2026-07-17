@@ -27,8 +27,13 @@ inline auto event_arg(const u32 event) -> u8 {
     return u8(event >> 16);
 }
 
-// fetch the next non-command from-chip frame, from the backlog or the chip;
-// command-channel events and stray responses are logged and consumed.
-// returns nullptr if nothing pending
-auto fetch_rx() -> coop::Async<noxx::Optional<net::AutoPacket>>;
+// from-chip pump, started once after init_yaps: sleeps on the chip irq line,
+// acks the interrupt and demultiplexes the yaps stream — command responses to
+// the sender, events to the ring, beacons/tx-status dropped, everything else
+// to the rx backlog (consumed via wait_rx/pop_rx_backlog). returns only on an
+// unrecoverable rx stream desync
+auto rx_task() -> coop::Async<bool>;
+
+// true if rx_task gave up on a wedged rx stream; the chip must be rebooted
+auto rx_desynced() -> bool;
 } // namespace halow

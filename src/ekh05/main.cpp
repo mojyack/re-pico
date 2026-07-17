@@ -1,7 +1,7 @@
 #include <connect/eapol.hpp>
 #include <connect/sae.hpp>
 #include <console.hpp>
-#include <coop/io.hpp>
+#include <coop/ext-event.hpp>
 #include <coop/promise.hpp>
 #include <coop/task-handle.hpp>
 #include <coop/timer.hpp>
@@ -91,6 +91,7 @@ auto dump_task_tree(const coop::Task& task, const int indent = 0) -> void {
 }
 
 auto halow_host_table = noxx::Optional<halow::HostTable>();
+auto halow_rx_handle  = coop::TaskHandle(); // rx pump, started by `halow init`
 auto netstack         = net::Stack();
 auto dhcp_client      = net::dhcp::Client();
 auto tcp_conn         = net::tcp::Conn(); // console-managed outbound connection
@@ -208,8 +209,11 @@ auto handle_command(noxx::StringView line) -> coop::Async<bool> {
             // start command channel
             co_unwrap(ptr, halow::host_table_ptr());
             co_unwrap(table, halow::parse_host_table(ptr));
-            halow::init_yaps(table.yaps);
+            co_ensure(halow::init_yaps(table.yaps));
             halow_host_table.emplace(table);
+            // from-chip pump: sleeps on the irq line and demuxes the yaps stream
+            halow_rx_handle.cancel(); // re-init replaces a previous pump
+            co_ensure((co_await coop::reveal_runner())->push_task(halow::rx_task(), &halow_rx_handle));
             co_ensure(co_await printf<"halow fw flags 0x{08x} yaps ysl 0x{08x} yds 0x{08x} status 0x{08x}\n">(
                 table.firmware_flags, table.yaps.ysl_addr, table.yaps.yds_addr, table.yaps.status_regs_addr));
             co_ensure(co_await printf<"halow cmd queue {} pool {} pages, reserved page size {}\n">(
@@ -250,7 +254,7 @@ auto handle_command(noxx::StringView line) -> coop::Async<bool> {
             co_unwrap(magic, halow::read_u32(ptr));
             co_ensure(co_await printf<"fw health: magic 0x{08x} ({})\n">(magic, magic == halow::host_magic ? "ok" : "WEDGED"));
         } else if(elms[1] == "rx") {
-            co_unwrap(packet, co_await halow::fetch_rx());
+            const auto packet = net::AutoPacket(halow::pop_rx_backlog());
             if(!packet) {
                 co_await print("no frame pending\n");
             } else {
@@ -533,6 +537,7 @@ __attribute__((section(".vector"))) void* vector[16 + u32(hw::nvic::IRQ::LpUart1
     nullptr,
     (void*)&pend_sv_call_handler,
     (void*)&systick_handler,
+    [16 + u32(hw::nvic::IRQ::Exti15)]  = (void*)&exti15_handler,
     [16 + u32(hw::nvic::IRQ::LpUart1)] = (void*)&uart::lpuart1_handler,
 };
 }

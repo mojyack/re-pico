@@ -1,5 +1,5 @@
 #pragma once
-#include <coop/io-pre.hpp>
+#include <coop/ext-event-pre.hpp>
 #include <noxx/span.hpp>
 
 namespace uart {
@@ -11,18 +11,18 @@ auto write(noxx::Span<const u8> buf) -> usize;
 auto read_available() -> bool;
 auto write_available() -> bool;
 
-struct ReadIOEvent : coop::IOEvent {
+struct ReadEvent : coop::ExtEvent {
     auto available() const -> bool override {
         return read_available();
     }
 };
 
-struct WriteIOEvent : coop::IOEvent {
+struct WriteEvent : coop::ExtEvent {
     auto available() const -> bool override {
         return write_available();
     }
 };
 
-inline auto read_event  = ReadIOEvent();
-inline auto write_event = WriteIOEvent();
+inline auto read_event  = ReadEvent();
+inline auto write_event = WriteEvent();
 } // namespace uart

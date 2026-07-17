@@ -202,14 +202,6 @@ auto negotiate_mss(const noxx::Span<const u8> options) -> u16 {
     return mss != 0 ? noxx::min(mss, rx_mss) : default_mss;
 }
 
-auto wait_event(coop::SingleEvent& event) -> coop::Async<void> {
-    co_await event;
-}
-
-auto sleep_task(const u64 ms) -> coop::Async<void> {
-    co_await coop::sleep_ms(ms);
-}
-
 auto next_ephemeral_port() -> u16 {
     static auto counter = u16(0xc000);
     counter             = counter >= 0xfff0 ? u16(0xc000) : u16(counter + 1);
@@ -437,7 +429,7 @@ auto Conn::listen(Stack& stack, const u16 port) -> bool {
 auto Conn::accept(Stack& /*stack*/) -> coop::Async<bool> {
     while(state == State::Listen || state == State::SynReceived) {
         tx_event = coop::SingleEvent();
-        co_await tx_event;
+        co_await coop::wait_for_event(tx_event);
     }
     co_return state != State::Closed;
 }
@@ -461,7 +453,7 @@ auto Conn::connect(Stack& stack, const IPv4Addr addr, const u16 port) -> coop::A
         if(!co_await send_segment(stack, *this, Flags::Syn, iss, {})) {
             break;
         }
-        co_await coop::select(wait_event(tx_event), sleep_task(rto_ms));
+        co_await coop::wait_for_event(tx_event, rto_ms * 1000);
         if(state == State::Established) {
             co_return true;
         }
@@ -504,7 +496,7 @@ auto Conn::send(Stack& stack, const noxx::Span<const u8> data) -> coop::Async<bo
             co_ensure(co_await send_segment(stack, *this, u8(Flags::Ack | (last ? Flags::Psh : 0)), snd_nxt, chunk));
             snd_nxt = u32(snd_nxt + count);
         }
-        if(co_await coop::select(wait_event(tx_event), sleep_task(rto_ms)) == 1) {
+        if(!co_await coop::wait_for_event(tx_event, rto_ms * 1000)) {
             // timeout: go-back-n from the oldest unacked byte. a zero window
             // is the peer's flow control, not a loss; do not count it
             if(snd_wnd != 0) {
@@ -536,7 +528,7 @@ auto Conn::recv(Stack& stack, const noxx::Span<u8> buffer) -> coop::Async<noxx::
         }
         co_ensure(state != State::Closed && state != State::Listen, "connection reset");
         rx_event = coop::SingleEvent();
-        co_await rx_event;
+        co_await coop::wait_for_event(rx_event);
     }
 }
 
@@ -565,7 +557,7 @@ auto Conn::close(Stack& stack) -> coop::Async<void> {
         if(!co_await send_segment(stack, *this, Flags::Fin | Flags::Ack, fin_seq, {})) {
             break;
         }
-        if(co_await coop::select(wait_event(tx_event), sleep_task(rto_ms)) == 1) {
+        if(!co_await coop::wait_for_event(tx_event, rto_ms * 1000)) {
             retries += 1;
             if(retries > max_retx) {
                 break;
@@ -579,7 +571,7 @@ auto Conn::close(Stack& stack) -> coop::Async<void> {
     // await the peer's fin for a bounded time; input() moves us to time-wait
     if(state == State::FinWait2) {
         tx_event = coop::SingleEvent();
-        co_await coop::select(wait_event(tx_event), sleep_task(fin_wait_ms));
+        co_await coop::wait_for_event(tx_event, fin_wait_ms * 1000);
         if(state == State::FinWait2) {
             co_await abort(stack); // the peer never closed; give up
         }

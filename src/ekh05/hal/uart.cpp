@@ -1,4 +1,4 @@
-#include <coop/io.hpp>
+#include <coop/ext-event.hpp>
 #include <hal/uart.hpp>
 #include <intrinsics.hpp>
 #include <noxx/bits.hpp>

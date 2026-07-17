@@ -1,3 +1,4 @@
+#include <coop/ext-event.hpp>
 #include <coop/promise.hpp>
 #include <coop/timer.hpp>
 #include <hal/time.hpp>
@@ -19,6 +20,8 @@ constexpr auto yaps_max_rx      = u32(1628);
 
 constexpr auto tx_space_timeout_us = u64(600'000);
 constexpr auto status_timeout_us   = u64(100'000);
+constexpr auto tx_space_wake_us    = u64(50'000); // re-check period while waiting for queue space
+constexpr auto event_busy_wait_ms  = u64(5);      // polling fallback when an event has another waiter
 
 constexpr auto rx_backlog_max = u32(4);
 
@@ -26,6 +29,24 @@ auto yaps            = YapsTable();
 auto ready           = false;
 auto rx_backlog_head = (net::Packet*)(nullptr);
 auto rx_backlog_len  = u32(0);
+
+// notified by push_rx_backlog for wait_rx
+struct RxPendingEvent : coop::ExtEvent {
+    auto available() const -> bool override {
+        return rx_backlog_len > 0;
+    }
+};
+auto rx_pending_event = RxPendingEvent();
+
+// latched by notify_tx_space (chip pages-freed interrupt), consumed by yaps_tx
+auto tx_space_freed = false;
+
+struct TxSpaceEvent : coop::ExtEvent {
+    auto available() const -> bool override {
+        return tx_space_freed;
+    }
+};
+auto tx_space_event = TxSpaceEvent();
 
 // crc7 over the delimiter payload bits, big-endian byte order (ref morse_yaps_crc)
 auto delim_crc(const u32 word) -> u8 {
@@ -62,9 +83,18 @@ auto tc_queue_for_channel(const u8 channel) -> TcQueue {
 }
 } // namespace
 
-auto init_yaps(const YapsTable& table) -> void {
-    yaps  = table;
+auto init_yaps(const YapsTable& table) -> bool {
+    constexpr auto error_value = false;
+
+    yaps = table;
+    // route the yaps from-chip interrupts to the irq line so rx_task can sleep
+    // between frames (ref morse_yaps_hw_enable_irqs)
+    constexpr auto irq_bits = u32(Int1::FcPktWaiting | Int1::FcPageFreed);
+    unwrap(enabled, read_u32(Reg::Int1En));
+    ensure(write_u32(Reg::Int1Clr, irq_bits));
+    ensure(write_u32(Reg::Int1En, enabled | irq_bits));
     ready = true;
+    return true;
 }
 
 auto read_status(YapsStatus& status) -> coop::Async<bool> {
@@ -110,11 +140,14 @@ auto yaps_tx(const u8 channel, net::Packet& packet, const SkbHeader::TxInfo* con
     const auto delim = make_delim(frame_len + yaps.reserved_page_size, queue.pool_id, true);
     noxx::memcpy(packet.prepend(4), &delim, 4);
 
-    // wait for room in the chip queue and its page pool
+    // wait for room in the chip queue and its page pool, woken by the
+    // pages-freed interrupt (with a periodic re-check as a safety net)
     const auto pages_needed = (frame_len + yaps.reserved_page_size + yaps_page_size - 1) / yaps_page_size + yaps_extra_pages;
     auto       status       = YapsStatus();
     const auto deadline     = time::now() + tx_space_timeout_us;
     while(true) {
+        // re-arm before the status read so a page free in between is not lost
+        tx_space_freed = false;
         co_ensure(co_await read_status(status));
         co_ensure(status.regs[YapsStatus::TcCrcFail] == 0, "yaps to-chip delimiter crc failure");
         if(status.regs[queue.pkts_reg] < queue.q_size &&
@@ -122,7 +155,9 @@ auto yaps_tx(const u8 channel, net::Packet& packet, const SkbHeader::TxInfo* con
             break;
         }
         co_ensure(time::now() < deadline, "yaps queue full");
-        co_await coop::sleep_ms(5);
+        if(co_await coop::wait_for_event(tx_space_event, tx_space_wake_us) == coop::EventResult::Error) {
+            co_await coop::sleep_ms(event_busy_wait_ms); // another tx holds the event
+        }
     }
 
     // the stream write alone hands the frame to the firmware, no doorbell
@@ -185,6 +220,7 @@ auto push_rx_backlog(net::Packet* const packet) -> void {
     }
     *tail = packet;
     rx_backlog_len += 1;
+    rx_pending_event.notify();
 }
 
 auto pop_rx_backlog() -> net::Packet* {
@@ -195,5 +231,26 @@ auto pop_rx_backlog() -> net::Packet* {
         rx_backlog_len -= 1;
     }
     return packet;
+}
+
+auto wait_rx(const u64 timeout_us) -> coop::Async<net::AutoPacket> {
+    const auto deadline = time::now() + timeout_us;
+    while(true) {
+        if(const auto packet = pop_rx_backlog(); packet != nullptr) {
+            co_return net::AutoPacket(packet);
+        }
+        const auto now = time::now();
+        if(now >= deadline) {
+            co_return net::AutoPacket();
+        }
+        if(co_await coop::wait_for_event(rx_pending_event, deadline - now) == coop::EventResult::Error) {
+            co_await coop::sleep_ms(event_busy_wait_ms); // another task holds the event
+        }
+    }
+}
+
+auto notify_tx_space() -> void {
+    tx_space_freed = true;
+    tx_space_event.notify();
 }
 } // namespace halow

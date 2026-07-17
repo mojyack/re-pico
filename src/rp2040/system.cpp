@@ -1,5 +1,6 @@
 #include <noxx/bits.hpp>
 #include <print.hpp>
+#include <hal/time.hpp>
 
 #include "hw/clocks.hpp"
 #include "hw/io-bank0.hpp"
@@ -87,3 +88,15 @@ auto memcmp(const void* a, const void* b, usize size) -> int {
     return 0;
 }
 } // namespace noxx
+
+// coop support
+namespace coop {
+auto now_us() -> u64 {
+    return time::now();
+}
+
+auto sleep_until(u64 time) -> void {
+    while(time::now() < time) {
+    }
+}
+} // namespace coop

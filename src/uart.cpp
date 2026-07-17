@@ -1,4 +1,4 @@
-#include <coop/io.hpp>
+#include <coop/ext-event.hpp>
 #include <coop/promise.hpp>
 #include <hal/uart.hpp>
 #include <uart.hpp>
@@ -18,14 +18,14 @@ auto write_blocking(noxx::Span<const u8> buf) -> void {
 
 auto read_all(noxx::Span<u8> buf) -> coop::Async<void> {
     while(buf.size() > 0) {
-        co_await coop::wait_for_io(uart::read_event);
+        co_await coop::wait_for_event(uart::read_event);
         buf = buf.subspan(read(buf));
     }
 }
 
 auto write_all(noxx::Span<const u8> buf) -> coop::Async<void> {
     while(buf.size() > 0) {
-        co_await coop::wait_for_io(uart::write_event);
+        co_await coop::wait_for_event(uart::write_event);
         buf = buf.subspan(write(buf));
     }
 }

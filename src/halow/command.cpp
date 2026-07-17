@@ -1,3 +1,4 @@
+#include <coop/ext-event.hpp>
 #include <coop/promise.hpp>
 #include <coop/timer.hpp>
 #include <hal/time.hpp>
@@ -9,6 +10,7 @@
 
 #include "command.hpp"
 #include "dot11.hpp"
+#include "halow.hpp"
 #include "util.hpp"
 #include "yaps.hpp"
 
@@ -20,8 +22,32 @@ constexpr auto host_id_seq_mask = u16(0xfff0);
 
 constexpr auto response_timeout_us = u64(600'000);
 
-auto busy = false;
-auto seq  = u16(0);
+constexpr auto rx_error_limit      = u32(8); // consecutive rx stream errors treated as a desync
+constexpr auto rx_error_backoff_ms = u64(5); // breather between rx errors, the irq line stays asserted
+
+auto busy     = false;
+auto seq      = u16(0);
+auto desynced = false; // rx stream wedged, chip reboot required
+
+// the response send_command is waiting for, filled by rx_task
+struct PendingResponse {
+    u16            id;
+    u16            host_id;
+    noxx::Span<u8> resp;
+    usize          copy_len = 0;
+    u16            vif      = 0;
+    i32            status   = 0;
+    bool           done     = false;
+};
+
+auto pending_response = (PendingResponse*)nullptr;
+
+struct ResponseEvent : coop::ExtEvent {
+    auto available() const -> bool override {
+        return pending_response != nullptr && pending_response->done;
+    }
+};
+auto response_event = ResponseEvent();
 
 // small ring of recent events (id | payload0 << 16), drained by pop_event
 constexpr auto event_ring_size = u32(4);
@@ -56,6 +82,16 @@ auto is_s1g_beacon(const net::Packet& packet) -> bool {
     return (fc & dot11::Fc::VerTypeSubMask) == dot11::Fc::S1gBeacon;
 }
 
+// log a tx status report frame, they carry no payload for anyone to consume
+// (ref struct morse_skb_tx_status)
+auto log_tx_status(const net::Packet& packet, const SkbHeader& hdr) -> void {
+    if(hdr.len < sizeof(SkbHeader::TxStatus)) {
+        return;
+    }
+    const auto status = (const SkbHeader::TxStatus*)packet_frame(packet, hdr);
+    log<"halow: tx status pkt {} {}\n">(status->pkt_id, (status->flags & TxFlag::NoAck) ? "no-ack" : "acked");
+}
+
 // consume a command-channel frame that is not the awaited response
 auto log_stray_command(const CommandHeader& header) -> void {
     if(header.flags & CommandFlag::Event) {
@@ -71,6 +107,45 @@ auto log_stray_command(const CommandHeader& header) -> void {
     } else {
         log<"halow: stray response 0x{04x}:0x{04x}\n">(header.message_id, header.host_id);
     }
+}
+
+// route a command-channel frame: the awaited response fills the pending slot,
+// events land in the ring, anything else is logged and dropped
+auto handle_command_frame(const CommandHeader& header) -> void {
+    if(pending_response == nullptr || !(header.flags & CommandFlag::Resp) ||
+       header.message_id != pending_response->id ||
+       (header.host_id & host_id_seq_mask) != pending_response->host_id) {
+        log_stray_command(header);
+        return;
+    }
+    auto&      p    = *pending_response;
+    const auto resp = (const CommandResponse*)&header;
+    if(header.len < sizeof(resp->status)) {
+        log<"halow: malformed response 0x{04x}\n">(header.message_id);
+        return;
+    }
+    p.status   = resp->status;
+    p.vif      = header.vif_id;
+    p.copy_len = noxx::min(header.len - sizeof(resp->status), p.resp.size());
+    noxx::memcpy(p.resp.data, resp->data, p.copy_len);
+    p.done = true;
+    response_event.notify();
+}
+
+// one from-chip frame out of the yaps stream, demultiplexed
+auto dispatch_rx(net::AutoPacket packet) -> void {
+    if(const auto cmd = command_payload(*packet); cmd != nullptr) {
+        handle_command_frame(*cmd);
+        return;
+    }
+    if(const auto skbh = parse_skb_header(*packet); skbh != nullptr && skbh->channel == SkbChan::TxStatus) {
+        log_tx_status(*packet, *skbh);
+        return;
+    }
+    if(is_s1g_beacon(*packet)) {
+        return;
+    }
+    push_rx_backlog(packet.release());
 }
 } // namespace
 
@@ -96,43 +171,29 @@ auto send_command(const u16 id, const noxx::Span<const u8> req, const noxx::Span
         .vif_id     = vif,
     }));
     co_ensure(w.append_span(req));
+
+    // arm the response slot before the send; yaps_tx suspends, the response
+    // may already be dispatched while it waits for queue space
+    auto pending = PendingResponse{
+        .id      = id,
+        .host_id = host_id,
+        .resp    = resp,
+    };
+    pending_response = &pending;
+    defer { pending_response = nullptr; };
+
     co_ensure(co_await yaps_tx(SkbChan::Command, *packet));
 
-    // await the matching response, backlogging unrelated frames meanwhile
-    const auto deadline = time::now() + response_timeout_us;
-    while(true) {
-        // a transient rx error must not fail the command, keep waiting
-        auto rx_o = yaps_rx();
-        if(!rx_o || !*rx_o) {
-            co_ensure(time::now() < deadline, "command response timeout");
-            co_await coop::sleep_ms(2);
-            continue;
-        }
-        auto&      rx   = *rx_o;
-        const auto rcmd = command_payload(*rx);
-        if(rcmd == nullptr) {
-            if(!is_s1g_beacon(*rx)) {
-                push_rx_backlog(rx.release());
-            }
-            continue;
-        }
-        if(!(rcmd->flags & CommandFlag::Resp) || rcmd->message_id != id || (rcmd->host_id & host_id_seq_mask) != host_id) {
-            log_stray_command(*rcmd);
-            continue;
-        }
-        const auto rresp = (const CommandResponse*)rcmd;
-        co_ensure(rcmd->len >= sizeof(rresp->status), "malformed response");
-        if(rresp->status != 0) {
-            log<"halow: command 0x{04x} failed with status {}\n">(id, i32(rresp->status));
-            co_return noxx::nullopt;
-        }
-        if(resp_vif != nullptr) {
-            *resp_vif = rcmd->vif_id;
-        }
-        const auto copy_len = noxx::min(rcmd->len - sizeof(rresp->status), resp.size());
-        noxx::memcpy(resp.data, rresp->data, copy_len);
-        co_return usize(copy_len);
+    co_await coop::wait_for_event(response_event, response_timeout_us);
+    co_ensure(pending.done, "command response timeout");
+    if(pending.status != 0) {
+        log<"halow: command 0x{04x} failed with status {}\n">(id, i32(pending.status));
+        co_return noxx::nullopt;
     }
+    if(resp_vif != nullptr) {
+        *resp_vif = pending.vif;
+    }
+    co_return usize(pending.copy_len);
 }
 
 auto pop_event() -> noxx::Optional<u32> {
@@ -145,23 +206,49 @@ auto pop_event() -> noxx::Optional<u32> {
     return id;
 }
 
-auto fetch_rx() -> coop::Async<noxx::Optional<net::AutoPacket>> {
-    constexpr auto error_value = noxx::nullopt;
+auto rx_desynced() -> bool {
+    return desynced;
+}
 
-    if(auto backlog = pop_rx_backlog(); backlog != nullptr) {
-        co_return net::AutoPacket(backlog);
+auto rx_task() -> coop::Async<bool> {
+    constexpr auto error_value = false;
+
+    auto rx_errors = u32(0);
+    while(true) {
+        co_await coop::wait_for_event(chip_irq_event);
+
+        // ack the chip interrupt before draining: frames arriving mid-drain
+        // re-assert the (level-held) irq line and wake us again
+        const auto sts_o = read_u32(Reg::Int1Sts);
+        if(!sts_o || !write_u32(Reg::Int1Clr, *sts_o)) {
+            log<"halow: chip irq status access failed\n">();
+            co_await coop::sleep_ms(rx_error_backoff_ms);
+            continue;
+        }
+        if(*sts_o & Int1::FcPageFreed) {
+            notify_tx_space();
+        }
+
+        // drain the from-chip stream
+        while(true) {
+            auto rx_o = yaps_rx();
+            if(!rx_o) {
+                // a run of rx errors means the stream desynced; stop instead of
+                // spinning on the stubbornly asserted irq line
+                rx_errors += 1;
+                if(rx_errors >= rx_error_limit) {
+                    desynced = true;
+                    co_ensure(false, "rx stream desynced (reboot required)");
+                }
+                co_await coop::sleep_ms(rx_error_backoff_ms);
+                break;
+            }
+            if(!*rx_o) {
+                break; // stream empty
+            }
+            rx_errors = 0;
+            dispatch_rx(noxx::move(*rx_o));
+        }
     }
-    co_unwrap(rx, yaps_rx());
-    if(!rx) {
-        co_return net::AutoPacket();
-    }
-    if(const auto cmd = command_payload(*rx); cmd != nullptr) {
-        log_stray_command(*cmd);
-        co_return net::AutoPacket();
-    }
-    if(is_s1g_beacon(*rx)) {
-        co_return net::AutoPacket();
-    }
-    co_return move(rx);
 }
 } // namespace halow

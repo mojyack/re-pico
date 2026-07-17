@@ -7,6 +7,7 @@
 #include <crypto/rng.hpp>
 #include <hal/rng.hpp>
 #include <hal/time.hpp>
+#include <net/ethernet.hpp>
 #include <net/packet-buf.hpp>
 #include <noxx/array.hpp>
 #include <noxx/bits.hpp>
@@ -31,11 +32,8 @@ constexpr auto mgmt_tid         = u8(7); // MMWLAN_MAX_QOS_TID
 constexpr auto mgmt_attempts    = u8(5);
 constexpr auto auth_tries       = u32(3);
 constexpr auto response_wait_us = u64(1'000'000);
-constexpr auto rx_poll_ms       = u32(5);
 constexpr auto assoc_capability = u16(dot11::CapInfo::Privacy | dot11::CapInfo::ShortPreamble |
                                       dot11::CapInfo::Qos | dot11::CapInfo::ShortSlotTime);
-constexpr auto ethertype_offset = usize(12);      // within an ethernet header
-constexpr auto ethertype_eapol  = u16(0x888e);    // 802.1X / EAPOL
 constexpr auto eapol_timeout_us = u64(5'000'000); // covers a couple of ap m1 retransmits
 
 // RSN information element advertised in the (secure) association request and
@@ -80,9 +78,8 @@ auto prim_bw_mhz = u8(1);
 
 // link maintenance task state (see link_task)
 constexpr auto keepalive_interval_us = u64(30'000'000); // idle time before a keepalive, well under the ap inactivity timeout
-constexpr auto rx_error_limit        = u32(8);          // consecutive rx stream errors treated as a desync
+constexpr auto link_wake_us          = u64(500'000);    // rx wait slice, bounds event/keepalive/desync check latency
 
-auto desynced      = false;              // rx stream wedged, chip reboot required
 auto last_activity = u64(0);             // last rx/tx time, drives the keepalive timer
 auto link_handle   = coop::TaskHandle(); // link_task's handle, cancelled by disconnect
 
@@ -120,32 +117,21 @@ auto tx_mgmt(const noxx::Span<const u8> frame) -> coop::Async<bool> {
     co_return co_await yaps_tx(SkbChan::Mgmt, *packet, &info);
 }
 
-// log a tx status report frame (ref struct morse_skb_tx_status)
-auto log_tx_status(const net::Packet& packet, const SkbHeader& hdr) -> void {
-    if(hdr.len < sizeof(SkbHeader::TxStatus)) {
-        return;
-    }
-    const auto status = (const SkbHeader::TxStatus*)packet_frame(packet, hdr);
-    log<"halow: tx status pkt {} {}\n">(status->pkt_id, (status->flags & TxFlag::NoAck) ? "no-ack" : "acked");
-}
-
 // await a mgmt frame of the given type from our bss, discarding others
 auto wait_mgmt(const u16 frame_control, const u64 timeout_us) -> coop::Async<noxx::Optional<net::AutoPacket>> {
     constexpr auto error_value = noxx::nullopt;
 
     const auto deadline = time::now() + timeout_us;
-    while(time::now() < deadline) {
-        auto rx_o = co_await fetch_rx();
-        if(!rx_o || !*rx_o) {
-            co_await coop::sleep_ms(rx_poll_ms);
-            continue;
+    while(true) {
+        const auto now = time::now();
+        if(now >= deadline) {
+            break;
         }
-        auto& rx = *rx_o;
+        auto rx = co_await wait_rx(deadline - now);
+        if(!rx) {
+            continue; // timed out, the loop condition ends the wait
+        }
         co_unwrap(skbh, parse_skb_header(*rx));
-        if(skbh.channel == SkbChan::TxStatus) {
-            log_tx_status(*rx, skbh);
-            continue;
-        }
         auto r = noxx::SpanReader(noxx::Span<const u8>{packet_frame(*rx, skbh), skbh.len});
         co_unwrap(header, r.read<dot11::Header>());
         if((header.frame_control & dot11::Fc::VerTypeSubMask) != frame_control) {
@@ -410,46 +396,46 @@ auto four_way_handshake() -> coop::Async<bool> {
     noxx::memcpy(rsn_buf.data + rsn_ie.size(), rsnxe.data, rsnxe.size());
 
     auto supp   = connect::eapol::Supplicant();
-    supp.pmk    = {sae_pmk.data, sae_pmk.size()};
-    supp.rsn_ie = {rsn_buf.data, rsn_buf.size()};
+    supp.pmk    = sae_pmk;
+    supp.rsn_ie = rsn_buf;
     supp.aa     = link.bssid;
     supp.spa    = link.mac;
     supp.rng    = &hw_rng;
 
     const auto deadline = time::now() + eapol_timeout_us;
-    while(!supp.complete && time::now() < deadline) {
-        auto rx_o = co_await fetch_rx();
-        if(!rx_o || !*rx_o) {
-            co_await coop::sleep_ms(rx_poll_ms);
-            continue;
+    while(!supp.complete) {
+        const auto now = time::now();
+        if(now >= deadline) {
+            break;
+        }
+        auto rx = co_await wait_rx(deadline - now);
+        if(!rx) {
+            continue; // timed out, the loop condition ends the wait
         }
         // decode the data frame in place, then pick out eapol by ethertype
-        if(!eth_from_rx(**rx_o)) {
+        if(!eth_from_rx(*rx)) {
             continue;
         }
-        const auto eth = (*rx_o)->data();
-        if((*rx_o)->len < ethertype_offset + 2) {
+        if(rx->len < sizeof(net::EthernetHeader)) {
             continue;
         }
-        const auto etype = u16(eth[ethertype_offset]) << 8 | eth[ethertype_offset + 1];
-        if(etype != ethertype_eapol) {
+        const auto eth = (const net::EthernetHeader*)rx->data();
+        if(noxx::byteswap(eth->ethertype) != net::EtherType::Eapol) {
             continue;
         }
 
-        const auto payload = noxx::Span<const u8>{eth + ethertype_offset + 2, (*rx_o)->len - (ethertype_offset + 2)};
+        const auto payload = noxx::Span<const u8>{rx->data() + sizeof(net::EthernetHeader), rx->len - sizeof(net::EthernetHeader)};
         auto       reply   = noxx::Array<u8, 256>();
         const auto reply_n = supp.on_frame(payload, reply);
         if(reply_n == 0) {
             continue;
         }
-        co_ensure(co_await eth_tx(link.bssid, ethertype_eapol, {reply.data, reply_n}), "eapol reply tx failed");
+        co_ensure(co_await eth_tx(link.bssid, net::EtherType::Eapol, {reply.data, reply_n}), "eapol reply tx failed");
     }
     co_ensure(supp.complete, "4-way handshake timed out");
 
     // pairwise key first (key index 0), then the group key(s) unwrapped from m3
-    co_ensure(co_await install_key(0, KeyCipher::AesCcm, AesKeyLen::Bits128, KeyType::Ptk,
-                                   {supp.ptk.tk.data, supp.ptk.tk.size()}, 0),
-              "install ptk failed");
+    co_ensure(co_await install_key(0, KeyCipher::AesCcm, AesKeyLen::Bits128, KeyType::Ptk, supp.ptk.tk, 0), "install ptk failed");
     const auto& gtk = supp.group.gtk;
     co_ensure(co_await install_key(gtk.key_id, KeyCipher::AesCcm,
                                    gtk.len == 32 ? AesKeyLen::Bits256 : AesKeyLen::Bits128, KeyType::Gtk,
@@ -539,22 +525,11 @@ auto associate(const noxx::StringView ssid, const bool secure) -> coop::Async<bo
     co_return true;
 }
 
-// mark the link as lost from inside the maintenance task; the loop then exits
-// and the post-loop teardown removes the chip interface. only the task calls
-// this — an explicit disconnect() cancels the task and owns its own teardown
-auto mark_link_down() -> void {
-    link.up = false;
-}
-
 // classify one from-air frame: tear the link down on deauth/disassoc from the
 // ap, decode data frames into the rx queue, drop the rest
 auto handle_air_frame(net::AutoPacket rx) -> coop::Async<void> {
     const auto skbh = parse_skb_header(*rx);
     if(skbh == nullptr) {
-        co_return;
-    }
-    if(skbh->channel == SkbChan::TxStatus) {
-        log_tx_status(*rx, *skbh);
         co_return;
     }
 
@@ -573,7 +548,7 @@ auto handle_air_frame(net::AutoPacket rx) -> coop::Async<void> {
         const auto kind = wifi->frame_control & dot11::Fc::VerTypeSubMask;
         if((kind == dot11::Fc::Deauth || kind == dot11::Fc::Disassoc) && mac_equal(wifi->addr2.data, link.bssid.data)) {
             log<"halow: ap sent {}, link down\n">(kind == dot11::Fc::Deauth ? "deauth" : "disassoc");
-            mark_link_down();
+            link.up = false;
             co_return;
         }
     }
@@ -657,7 +632,6 @@ auto connect(const dot11::MacAddr& mac, const noxx::StringView ssid, const noxx:
         co_ensure(co_await set_sta_state(StaState::Authorized, link.aid));
 
         link.up       = true;
-        desynced      = false;
         last_activity = time::now();
         // hand ongoing rx / keepalive / loss detection to a background task,
         // keeping its handle so disconnect can cancel it
@@ -697,7 +671,7 @@ auto disconnect() -> coop::Async<bool> {
 }
 
 auto link_desynced() -> bool {
-    return desynced;
+    return rx_desynced();
 }
 
 auto send_keepalive() -> coop::Async<bool> {
@@ -728,50 +702,38 @@ auto send_keepalive() -> coop::Async<bool> {
 auto link_task() -> coop::Async<bool> {
     constexpr auto error_value = false;
 
-    last_activity  = time::now();
-    auto rx_errors = u32(0);
+    last_activity = time::now();
     while(link.up) {
         // firmware-signalled loss (beacon loss / tsf reset)
         while(auto event = pop_event()) {
             const auto id = event_id(*event);
             if(id == EventId::BeaconLoss || id == EventId::ConnectionLoss) {
                 log<"halow: link lost (event 0x{04x})\n">(id);
-                mark_link_down();
+                link.up = false;
             }
+        }
+        // rx_task gave up on a wedged rx stream
+        if(rx_desynced()) {
+            log<"halow: rx stream desynced, link down (reboot required)\n">();
+            link.up = false;
         }
         if(!link.up) {
             break;
         }
 
-        auto rx_o    = co_await fetch_rx();
-        auto handled = false;
-        if(!rx_o) {
-            // a yaps read error: a run of these means the rx stream desynced
-            rx_errors += 1;
-            if(rx_errors >= rx_error_limit) {
-                log<"halow: rx stream desynced, link down (reboot required)\n">();
-                desynced = true;
-                mark_link_down();
-                break;
-            }
-        } else if(*rx_o) {
-            rx_errors     = 0;
-            handled       = true;
-            last_activity = time::now();
-            co_await handle_air_frame(noxx::move(*rx_o));
-        } else {
-            rx_errors = 0;
-        }
-
         // keep the association fresh while idle
-        if(link.up && time::now() - last_activity > keepalive_interval_us) {
+        if(time::now() - last_activity > keepalive_interval_us) {
             if(co_await send_keepalive()) {
                 last_activity = time::now();
             }
         }
 
-        if(!handled) {
-            co_await coop::sleep_ms(rx_poll_ms);
+        // sleep until rx_task queues a frame; the slice bounds how stale the
+        // event/desync/keepalive checks above can get
+        auto rx = co_await wait_rx(link_wake_us);
+        if(rx) {
+            last_activity = time::now();
+            co_await handle_air_frame(noxx::move(rx));
         }
     }
 
@@ -814,7 +776,8 @@ auto eth_tx(const dot11::MacAddr& dst, const u16 ethertype, const noxx::Span<con
     const auto multicast = bool(dst[0] & 1);
     pkt_id += 1;
     const auto info = SkbHeader::TxInfo{
-        .flags  = TxFlag::ImmediateReport | BF(TxFlag::VifId, u32(link.vif)) |
+        .flags  = TxFlag::ImmediateReport |
+                  BF(TxFlag::VifId, u32(link.vif)) |
                   (link.encrypted ? (TxFlag::HwEncrypt | BF(TxFlag::KeyIdx, u32(0))) : 0),
         .pkt_id = pkt_id,
         .tid    = 0,
@@ -826,58 +789,52 @@ auto eth_tx(const dot11::MacAddr& dst, const u16 ethertype, const noxx::Span<con
 auto eth_from_rx(net::Packet& packet) -> bool {
     constexpr auto error_value = false;
 
-    unwrap(hdr, parse_skb_header(packet));
-    if(hdr.channel == SkbChan::TxStatus) {
-        log_tx_status(packet, hdr);
-        return false;
+    unwrap(skbh, parse_skb_header(packet));
+    auto r = noxx::SpanReader(noxx::Span<const u8>{packet_frame(packet, skbh), skbh.len});
+    if(skbh.rx_status.flags & RxFlag::FcsIncluded) {
+        ensure(r.buf.size >= dot11::fcs_len);
+        r.buf.size -= dot11::fcs_len;
     }
-    const auto body = packet_frame(packet, hdr);
-    auto       len  = usize(hdr.len);
-    if(hdr.rx_status.flags & RxFlag::FcsIncluded) {
-        ensure(len >= dot11::fcs_len);
-        len -= dot11::fcs_len;
-    }
-    if(len < sizeof(dot11::Header)) {
-        log<"halow: rx short frame chan 0x{02x} len {}\n">(hdr.channel, hdr.len);
+    const auto wifi_p = r.read<dot11::Header>();
+    if(wifi_p == nullptr) {
+        log<"halow: rx short frame chan 0x{02x} len {}\n">(skbh.channel, skbh.len);
         return false;
     }
     // the ap delivers both qos and plain data frames; drop everything else
     // (s1g beacons arrive continuously, they are skipped silently)
-    const auto wifi    = (const dot11::Header*)body;
-    const auto fc      = wifi->frame_control;
-    const auto is_qos  = (fc & dot11::Fc::VerTypeSubMask) == dot11::Fc::QosData;
-    const auto is_data = (fc & dot11::Fc::VerTypeSubMask) == dot11::Fc::TypeData;
+    const auto& wifi    = *wifi_p;
+    const auto  fc      = wifi.frame_control;
+    const auto  is_qos  = (fc & dot11::Fc::VerTypeSubMask) == dot11::Fc::QosData;
+    const auto  is_data = (fc & dot11::Fc::VerTypeSubMask) == dot11::Fc::TypeData;
     if((!is_qos && !is_data) || (fc & dot11::Fc::ToDs)) {
         if((fc & dot11::Fc::VerTypeSubMask) != dot11::Fc::S1gBeacon) {
-            log<"halow: rx non-data frame fc 0x{04x} len {}\n">(fc, hdr.len);
+            log<"halow: rx non-data frame fc 0x{04x} len {}\n">(fc, skbh.len);
         }
         return false;
     }
-    const auto hdr_len = is_qos ? sizeof(dot11::QosData) : sizeof(dot11::Header);
+    if(is_qos) {
+        ensure(r.read(sizeof(dot11::QosData) - sizeof(dot11::Header)) != nullptr, "rx short data frame");
+    }
     // hardware-decrypted ccmp frames keep the 8-byte ccmp header (right after
     // the mac header) and the 8-byte mic (before the fcs); strip both so the
     // llc/snap lands where the plaintext path expects it. ref umac_datapath
-    const auto encrypted  = bool(hdr.rx_status.flags & RxFlag::Decrypted);
-    const auto crypto_hdr = encrypted ? dot11::ccmp_hdr_len : usize(0);
-    const auto crypto_mic = encrypted ? dot11::ccmp_mic_len : usize(0);
-    if(len < hdr_len + crypto_hdr + crypto_mic + dot11::llc_snap_len) {
-        log<"halow: rx short data frame len {}\n">(hdr.len);
-        return false;
+    if(skbh.rx_status.flags & RxFlag::Decrypted) {
+        ensure(r.read(dot11::ccmp_hdr_len) != nullptr, "rx short data frame");
+        ensure(r.buf.size >= dot11::ccmp_mic_len, "rx short data frame");
+        r.buf.size -= dot11::ccmp_mic_len;
     }
-    len -= crypto_mic;
-    const auto llc = body + hdr_len + crypto_hdr;
-    for(auto i = usize(0); i < sizeof(dot11::llc_snap); i += 1) {
-        ensure(llc[i] == dot11::llc_snap[i], "unexpected llc header");
-    }
+    unwrap(llc, r.read_span(sizeof(dot11::llc_snap)), "rx short data frame");
+    ensure(llc == dot11::llc_snap, "unexpected llc header");
+    ensure(r.buf.size >= sizeof(u16), "rx short data frame"); // ethertype must follow the snap
 
-    // rebuild the ethernet header just before the payload's ethertype:
-    // da = addr1, sa = addr3 (from-ds), ethertype already in place after the
-    // snap. sa is copied first, da would clobber its tail
-    const auto eth = (u8*)body + hdr_len + crypto_hdr + sizeof(dot11::llc_snap) - ethertype_offset;
-    noxx::memcpy(eth + sizeof(dot11::MacAddr), wifi->addr3.data, sizeof(dot11::MacAddr));
-    noxx::memcpy(eth + 0, wifi->addr1.data, sizeof(dot11::MacAddr));
-    packet.len = u16((body - packet.data()) + len); // drop fcs and ccmp mic
-    ensure(packet.consume(usize(eth - packet.data())));
+    // rebuild the ethernet header just before the payload's ethertype (now at
+    // the reader position): da = addr1, sa = addr3 (from-ds). sa is copied
+    // first, da would clobber its tail
+    const auto eth = (net::EthernetHeader*)(r.buf.data - __builtin_offsetof(net::EthernetHeader, ethertype));
+    eth->src       = wifi.addr3;
+    eth->dst       = wifi.addr1;
+    packet.len     = u16((r.buf.data + r.buf.size) - packet.data()); // drop fcs and ccmp mic
+    ensure(packet.consume(usize((const u8*)eth - packet.data())));
     return true;
 }
 } // namespace halow

@@ -51,7 +51,7 @@ struct HwScanPrimBw {
 constexpr auto qdbm_per_dbm    = i32(4);
 constexpr auto dwell_time_ms   = u32(105);
 constexpr auto scan_timeout_us = u64(30'000'000);
-constexpr auto rx_poll_ms      = u32(5);
+constexpr auto scan_wake_us    = u64(100'000); // rx wait slice, bounds the scan-done event check latency
 constexpr auto hw_scan_req_max = usize(320); // fits the largest regdom chan list
 
 constexpr auto broadcast_mac = dot11::MacAddr{0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
@@ -274,19 +274,14 @@ auto scan(const dot11::MacAddr& mac, const noxx::StringView ssid, const noxx::Sp
         const auto begun    = time::now();
         const auto deadline = begun + scan_timeout_us;
         while(!done && time::now() < deadline) {
-            auto idle = true;
-            if(auto rx_o = co_await fetch_rx(); rx_o && *rx_o) {
-                count = process_mgmt_frame(**rx_o, results, count);
-                idle  = false;
+            if(auto rx = co_await wait_rx(scan_wake_us); rx) {
+                count = process_mgmt_frame(*rx, results, count);
             }
             while(auto event = pop_event()) {
                 if(event_id(*event) == EventId::HwScanDone) {
                     done = true;
                     log<"halow: scan done after {}ms, aborted={}\n">(u32((time::now() - begun) / 1000), event_arg(*event));
                 }
-            }
-            if(idle && !done) {
-                co_await coop::sleep_ms(rx_poll_ms);
             }
         }
         if(!done) {

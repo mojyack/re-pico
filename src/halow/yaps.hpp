@@ -38,8 +38,9 @@ struct YapsStatus {
     u32 regs[Count];
 };
 
-// remember the yaps stream layout, must be called once after parse_host_table
-auto init_yaps(const YapsTable& table) -> void;
+// remember the yaps stream layout and enable the chip's from-chip interrupts,
+// must be called once after parse_host_table
+auto init_yaps(const YapsTable& table) -> bool;
 
 // read the status block, waiting out the firmware-held lock word
 auto read_status(YapsStatus& status) -> coop::Async<bool>;
@@ -62,7 +63,15 @@ inline auto packet_frame(const net::Packet& packet, const SkbHeader& hdr) -> con
     return packet.data() + sizeof(SkbHeader) + hdr.offset;
 }
 
-// backlog of received frames nobody was waiting for, bounded; push frees on overflow
+// backlog of received frames awaiting a consumer, bounded; push frees on overflow
 auto push_rx_backlog(net::Packet* packet) -> void;
 auto pop_rx_backlog() -> net::Packet*;
+
+// pop the next backlog frame, suspending until rx_task queues one; an empty
+// packet means the timeout expired
+auto wait_rx(u64 timeout_us) -> coop::Async<net::AutoPacket>;
+
+// wake a yaps_tx stalled on queue space; called by rx_task on the chip's
+// pages-freed interrupt
+auto notify_tx_space() -> void;
 } // namespace halow

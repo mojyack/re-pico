@@ -1,4 +1,4 @@
-#include <coop/io.hpp>
+#include <coop/ext-event.hpp>
 #include <hal/uart.hpp>
 #include <intrinsics.hpp>
 #include <noxx/bits.hpp>
@@ -89,7 +89,7 @@ auto uart0_handler() -> void {
 
 auto read(const noxx::Span<u8> buf) -> usize {
     auto n = usize(0);
-    while(rx_head != rx_tail && n < buf.size) {
+    while(rx_head != rx_tail && n < buf.size()) {
         __disable_irq();
         buf[n]  = rx_buf[rx_tail];
         rx_tail = (rx_tail + 1) % rx_buf_size;
@@ -101,7 +101,7 @@ auto read(const noxx::Span<u8> buf) -> usize {
 
 auto write(const noxx::Span<const u8> buf) -> usize {
     auto n = usize(0);
-    while(!(UART0_REGS.flag & uart::Flag::TXFIFOFull) && n < buf.size) {
+    while(!(UART0_REGS.flag & uart::Flag::TXFIFOFull) && n < buf.size()) {
         UART0_REGS.data = buf[n];
         n += 1;
     }
