@@ -2,6 +2,8 @@
 #include <coop/generator.hpp>
 #include <noxx/optional.hpp>
 
+#include "fw-store.hpp"
+
 namespace halow {
 struct FirmwareInfo {
     u32 host_table_ptr;
@@ -21,7 +23,10 @@ constexpr auto version_patch(const u32 v) -> u32 {
     return v & 0x3ff;
 }
 
-auto load_firmware() -> coop::Async<noxx::Optional<FirmwareInfo>>;
+auto load_firmware(const FwStore& store) -> coop::Async<noxx::Optional<FirmwareInfo>>;
+
+// the store passed to the last load_firmware, nullptr before the first load
+extern const FwStore* fw_store;
 
 // read back the host table pointer published by a booted firmware
 auto host_table_ptr() -> noxx::Optional<u32>;

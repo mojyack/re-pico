@@ -41,7 +41,6 @@ EKH05_OBJS := $(OUT)/ekh05/main.o \
 			  $(OUT)/crypto/p256.o \
 			  $(OUT)/connect/sae.o \
 			  $(OUT)/connect/eapol.o \
-			  $(OUT)/halow-fw-blob.o \
 			  $(OUT)/halow-regdb.o \
 			  $(OUT)/coop/runner.o \
 			  $(OUT)/noxx/malloc.o \
@@ -83,13 +82,18 @@ $(OUT)/boot.elf: src/ekh05/link-boot.ld \
 # custom commands
 .PHONY: flash flash-boot send
 
+# halow firmware store location, keep in sync with src/ekh05/main.cpp and link*.ld
+FW_STORE_ADDR := 0x08040000
+
 # flash firmware
-flash: $(OUT)/firmware.bin
-	st-flash --reset write $< 0x08000000
+flash: $(OUT)/firmware.bin $(OUT)/halow-fw-store.bin
+	st-flash write $(OUT)/halow-fw-store.bin $(FW_STORE_ADDR)
+	st-flash --reset write $(OUT)/firmware.bin 0x08000000
 
 # flash bootloader
-flash-boot: $(OUT)/boot.bin
-	st-flash --reset write $< 0x08000000
+flash-boot: $(OUT)/boot.bin $(OUT)/halow-fw-store.bin
+	st-flash write $(OUT)/halow-fw-store.bin $(FW_STORE_ADDR)
+	st-flash --reset write $(OUT)/boot.bin 0x08000000
 
 send: $(OUT)/firmware-ram.bin
 	python3 tools/send-firmware.py -p $(SERIAL) -b 921600 $<

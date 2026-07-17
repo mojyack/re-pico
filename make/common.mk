@@ -27,12 +27,10 @@ FW_ELF      := ref/morse-firmware/firmware/mm8108b2-rl.bin
 BCF_ELF     := ref/morse-firmware/bcf/morsemicro/bcf_mf15457.bin
 BCF_COUNTRY := JP
 
-$(addprefix $(OUT)/halow-fw-blob, .bin .hpp .cpp): tools/generate-halow-fw.py $(FW_ELF) $(BCF_ELF)
+# self-describing store image (src/halow/fw-store.hpp), flashed with the bootloader
+$(OUT)/halow-fw-store.bin: tools/generate-halow-fw.py $(FW_ELF) $(BCF_ELF)
 	mkdir -p $(OUT)
-	python3 tools/generate-halow-fw.py $(FW_ELF) $(BCF_ELF) $(BCF_COUNTRY) $(addprefix $(OUT)/halow-fw-blob, .bin .hpp .cpp)
-
-$(OUT)/halow/firmware.o: src/halow/firmware.cpp $(OUT)/halow-fw-blob.hpp
-	$(CXX) $(CXXFLAGS) -c $< -o $@
+	python3 tools/generate-halow-fw.py $(FW_ELF) $(BCF_ELF) $(BCF_COUNTRY) $@
 
 # halow s1g regulatory channel tables
 
@@ -42,7 +40,7 @@ $(addprefix $(OUT)/halow-regdb, .hpp .cpp): tools/generate-halow-regdb.py $(REGD
 	mkdir -p $(OUT)
 	python3 tools/generate-halow-regdb.py $(REGDB_SRC) $(addprefix $(OUT)/halow-regdb, .hpp .cpp)
 
-$(OUT)/halow/scan.o: src/halow/scan.cpp $(OUT)/halow-regdb.hpp $(OUT)/halow-fw-blob.hpp
+$(OUT)/halow/scan.o: src/halow/scan.cpp $(OUT)/halow-regdb.hpp
 
 $(OUT)/halow/connect.o: src/halow/connect.cpp $(OUT)/halow-regdb.hpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@

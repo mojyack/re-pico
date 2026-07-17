@@ -1,7 +1,6 @@
 #include <coop/promise.hpp>
 #include <coop/timer.hpp>
 #include <hal/time.hpp>
-#include <halow-fw-blob.hpp>
 #include <inflate.hpp>
 #include <noxx/unique-ptr.hpp>
 
@@ -53,29 +52,34 @@ auto firmware_trigger() -> coop::Async<bool> {
 }
 
 // inflate and upload segments
-auto load_segments(const FwSegment* const segments, const u32 count) -> bool {
+auto load_segments(const u8* const blob, const FwSegment* const segments, const u32 count) -> bool {
     constexpr auto error_value = false;
 
     for(auto i = u32(0); i < count; i += 1) {
         const auto& seg = segments[i];
         const auto  buf = noxx::make_unique_array<u8>(seg.orig_len);
         ensure(buf);
-        ensure(inflate({halow_fw_blob + seg.offset, seg.comp_len}, {buf.get(), seg.orig_len}));
+        ensure(inflate({blob + seg.offset, seg.comp_len}, {buf.get(), seg.orig_len}));
         ensure(write_multi(seg.addr, buf.get(), seg.orig_len));
     }
     return true;
 }
 } // namespace
 
-auto load_firmware() -> coop::Async<noxx::Optional<FirmwareInfo>> {
+const FwStore* fw_store = nullptr;
+
+auto load_firmware(const FwStore& store) -> coop::Async<noxx::Optional<FirmwareInfo>> {
     constexpr auto error_value = noxx::nullopt;
+
+    co_ensure(store.magic == FwStore::magic_value, "fw store magic mismatch, not flashed?");
+    fw_store = &store;
 
     // let get_host_table_ptr detect the firmware republishing the pointer
     co_ensure(write_u32(reg_manifest_ptr, 0));
 
     // segments ship as independent raw-DEFLATE streams, inflated on the fly
-    co_ensure(load_segments(fw_segments, fw_segments_count));
-    co_ensure(load_segments(bcf_segments, bcf_segments_count));
+    co_ensure(load_segments(store.blob(), store.fw_segments(), store.fw_segments_count));
+    co_ensure(load_segments(store.blob(), store.bcf_segments(), store.bcf_segments_count));
 
     co_ensure(co_await firmware_trigger());
 

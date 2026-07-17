@@ -2,7 +2,6 @@
 #include <coop/promise.hpp>
 #include <coop/timer.hpp>
 #include <hal/time.hpp>
-#include <halow-fw-blob.hpp>
 #include <halow-regdb.hpp>
 #include <noxx/algorithm.hpp>
 #include <noxx/array.hpp>
@@ -11,6 +10,7 @@
 
 #include "command.hpp"
 #include "dot11.hpp"
+#include "firmware.hpp"
 #include "scan.hpp"
 #include "util.hpp"
 #include "yaps.hpp"
@@ -232,8 +232,11 @@ auto make_s1g_capabilities() -> connect::ie::S1gCaps {
 
 // the regdom matching the country the firmware's bcf was loaded with
 auto find_regdom() -> const Regdom* {
+    if(fw_store == nullptr) {
+        return nullptr;
+    }
     for(auto i = u32(0); i < regdoms_count; i += 1) {
-        if(regdoms[i].country[0] == fw_country[0] && regdoms[i].country[1] == fw_country[1]) {
+        if(regdoms[i].country[0] == fw_store->country[0] && regdoms[i].country[1] == fw_store->country[1]) {
             return &regdoms[i];
         }
     }

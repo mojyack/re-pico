@@ -1,7 +1,7 @@
 ENTRY(vector);
 
 MEMORY {
-    flash(rx) : ORIGIN = 0x08000000, LENGTH = 2048k
+    flash(rx) : ORIGIN = 0x08000000, LENGTH = 256k /* halow fw store at 0x08040000 */
     sram(rwx) : ORIGIN = 0x20000000, LENGTH = 768k /* SRAM1+2+3, contiguous */
 }
 

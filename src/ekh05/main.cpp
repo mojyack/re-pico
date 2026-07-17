@@ -54,6 +54,9 @@ extern void (*init_array_start[])();
 extern void (*init_array_end[])();
 
 namespace {
+// halow firmware store flashed with the bootloader (make flash-boot)
+const auto& halow_fw_store = *(const halow::FwStore*)0x08040000;
+
 template <noxx::comptime::String str, class... Args>
 auto printf_blocking(const Args&... args) -> bool {
     constexpr auto error_value = false;
@@ -158,7 +161,7 @@ auto handle_command(noxx::StringView line) -> coop::Async<bool> {
             // download firmware blob and bcf
             co_unwrap(id, halow::read_u32(halow::Reg::ChipID));
             co_ensure(co_await printf<"halow chip id 0x{08x}\n">(id));
-            co_unwrap(fw, co_await halow::load_firmware());
+            co_unwrap(fw, co_await halow::load_firmware(halow_fw_store));
             co_ensure(co_await printf<"halow host table 0x{08x} magic 0x{08x} fw {}.{}.{}\n">(
                 fw.host_table_ptr, fw.magic,
                 halow::version_major(fw.version),
