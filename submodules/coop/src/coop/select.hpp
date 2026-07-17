@@ -15,7 +15,7 @@ namespace coop {
 template <class... T>
     requires(noxx::is_same<noxx::RemoveReference<T>, coop::Async<void>> && ...)
 auto select(T&&... args) -> coop::Async<usize> {
-    constexpr auto n   = sizeof...(T);
+    constexpr auto n             = sizeof...(T);
     auto           tasks         = noxx::Array<coop::Async<void>, n>{noxx::forward<T>(args)...};
     auto           handles       = noxx::Array<coop::TaskHandle, n>();
     auto           done          = coop::SingleEvent();
@@ -29,7 +29,7 @@ auto select(T&&... args) -> coop::Async<usize> {
     for(auto i = usize(0); i < n; i += 1) {
         runner.push_task(task_template(i), &handles[i]);
     }
-    co_await done;
+    co_await coop::wait_for_event(done);
     for(auto i = usize(0); i < n; i += 1) {
         handles[i].cancel();
     }

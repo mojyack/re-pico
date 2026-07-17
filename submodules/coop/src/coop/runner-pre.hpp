@@ -3,34 +3,41 @@
 #include <noxx/vector.hpp>
 
 #include "cohandle.hpp"
+#include "event.hpp"
 #include "generator-pre.hpp"
 #include "task-handle-pre.hpp"
 
 namespace coop {
-struct IOEvent;
+struct ExtEvent;
+struct ExtAWaiter;
 struct SingleEvent;
+struct SingleAWaiter;
 struct MultiEvent;
+struct MultiAWaiter;
 
 struct ByTimer {
     u64 suspend_until = 0;
 };
 
-struct ByIO {
-    IOEvent* event;
+struct ByExtEvent {
+    ExtEvent* event;
+    TimePoint deadline;
 };
 
 struct BySingleEvent {
     SingleEvent* event;
+    TimePoint    deadline;
 };
 
 struct ByMultiEvent {
     MultiEvent* event;
+    TimePoint   deadline;
 };
 
 struct ByAwaiting {
 };
 
-using SuspendReason = noxx::Variant<ByTimer, ByIO, BySingleEvent, ByMultiEvent, ByAwaiting>;
+using SuspendReason = noxx::Variant<ByTimer, ByExtEvent, BySingleEvent, ByMultiEvent, ByAwaiting>;
 
 struct Task {
     std::coroutine_handle<> handle;
@@ -46,9 +53,9 @@ struct Task {
 struct Runner {
     // private
     struct GatheringResult {
-        u64  now;
-        u64  wake    = u64(-1);
-        bool poll_io = false;
+        u64       now;
+        TimePoint wake    = time_infinite;
+        bool      poll_io = false;
     };
 
     Task                root;
@@ -56,6 +63,8 @@ struct Runner {
     usize               loop_count   = 0;
     noxx::Vector<Task*> running_tasks;
     noxx::Vector<bool>  objective_task_finished;
+
+    volatile bool any_ext_event_available = false;
 
     // private
     auto gather_resumable_tasks(Task& task, GatheringResult& result) -> bool;
@@ -70,10 +79,11 @@ struct Runner {
     // for awaiters
     auto join(TaskHandle& handle) -> bool;
     auto delay(u64 duration_us) -> void;
-    auto io_wait(IOEvent& event) -> void;
-    auto event_wait(SingleEvent& event) -> void;
+    auto event_wait(ExtEvent& event, ExtAWaiter& awaiter, Duration timeout) -> void;
+    auto event_notify(ExtEvent& event) -> void;
+    auto event_wait(SingleEvent& event, SingleAWaiter& awaiter, Duration timeout) -> void;
     auto event_notify(SingleEvent& event) -> void;
-    auto event_wait(MultiEvent& event) -> void;
+    auto event_wait(MultiEvent& event, MultiAWaiter& awaiter, Duration timeout) -> void;
     auto event_notify(MultiEvent& event, usize n) -> void;
 
     // public

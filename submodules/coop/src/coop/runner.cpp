@@ -1,9 +1,10 @@
-#include "io-pre.hpp"
+#include "ext-event-pre.hpp"
 #include "multi-event-pre.hpp"
 #include "platform.hpp"
 #include "runner-pre.hpp"
 #include "single-event-pre.hpp"
 
+#include <noxx/algorithm.hpp>
 #include <noxx/assert.hpp>
 
 namespace coop {
@@ -15,7 +16,9 @@ auto new_task(Task src) -> Task* {
     }
     return ptr;
 }
+} // namespace impl
 
+namespace {
 auto delete_task(Task* const task) -> void {
     task->~Task();
     noxx::free(task);
@@ -31,13 +34,18 @@ auto find_index(Task& child) -> usize {
     return siblings.size();
 }
 
-auto erase_at(noxx::Vector<Task*>& vec, const usize index) -> void {
+template <class T>
+auto erase_at(noxx::Vector<T>& vec, const usize index) -> void {
     for(auto i = index + 1; i < vec.size(); i += 1) {
-        vec[i - 1] = vec[i];
+        vec[i - 1] = noxx::move(vec[i]);
     }
     vec.resize(vec.size() - 1);
 }
-} // namespace impl
+
+auto timeout_to_deadline(const Duration timeout) -> TimePoint {
+    return timeout == time_infinite ? time_infinite : now_us() + timeout;
+}
+} // namespace
 
 auto Runner::gather_resumable_tasks(Task& task, GatheringResult& result) -> bool {
     constexpr auto error_value = false;
@@ -59,18 +67,58 @@ auto Runner::gather_resumable_tasks(Task& task, GatheringResult& result) -> bool
         if(r.suspend_until <= result.now) {
             reason = {};
             ensure(running_tasks.append(&task));
-        } else if(r.suspend_until < result.wake) {
-            result.wake = r.suspend_until;
+        } else {
+            result.wake = noxx::min(result.wake, r.suspend_until);
         }
     } break;
-    case SuspendReason::index_of<ByIO>: {
-        auto& r = reason.as<ByIO>();
-        if(r.event->available()) {
-            r.event->waiter = nullptr;
-            reason          = {};
+    case SuspendReason::index_of<ByExtEvent>: {
+        auto& r = reason.as<ByExtEvent>();
+
+        const auto avail = r.event->available();
+        const auto timed = r.deadline <= result.now;
+        if(avail || timed) {
+            r.event->waiter          = nullptr;
+            r.event->awaiter->result = avail ? EventResult::Ok : EventResult::TimedOut;
+            reason                   = {};
             ensure(running_tasks.append(&task));
         } else {
+            if(r.deadline != time_infinite) {
+                result.wake = noxx::min(result.wake, r.deadline);
+            }
             result.poll_io = true;
+        }
+    } break;
+    case SuspendReason::index_of<BySingleEvent>: {
+        auto& r = reason.as<BySingleEvent>();
+
+        const auto timed = r.deadline <= result.now;
+        if(timed) {
+            r.event->waiter->suspend_reason = {};
+            r.event->waiter                 = nullptr;
+            r.event->awaiter->result        = false;
+            ensure(running_tasks.append(&task));
+        } else if(r.deadline != time_infinite) {
+            result.wake = noxx::min(result.wake, r.deadline);
+        }
+    } break;
+    case SuspendReason::index_of<ByMultiEvent>: {
+        auto& r = reason.as<ByMultiEvent>();
+
+        const auto timed = r.deadline <= result.now;
+        if(timed) {
+            // remove this task from waiters list
+            auto& waiters = r.event->waiters;
+            for(auto i = 0uz; i < waiters.size(); i += 1) {
+                if(waiters[i].task == &task) {
+                    waiters[i].task->suspend_reason = {};
+                    waiters[i].awaiter->result      = false;
+                    erase_at(waiters, i);
+                    break;
+                }
+            }
+            ensure(running_tasks.append(&task));
+        } else if(r.deadline != time_infinite) {
+            result.wake = noxx::min(result.wake, r.deadline);
         }
     } break;
     case SuspendReason::index_of<ByAwaiting>:
@@ -106,8 +154,8 @@ auto Runner::destroy_task(Task& task) -> bool {
     for(auto i = usize(0); i < task.children.size();) {
         auto& child = *task.children[i];
         if(destroy_task(child)) {
-            impl::delete_task(&child);
-            impl::erase_at(task.children, i);
+            delete_task(&child);
+            erase_at(task.children, i);
         } else {
             i += 1;
         }
@@ -136,8 +184,8 @@ auto Runner::destroy_task(Task& task) -> bool {
             }
         }
     } break;
-    case SuspendReason::index_of<ByIO>: {
-        auto& r         = task.suspend_reason.as<ByIO>();
+    case SuspendReason::index_of<ByExtEvent>: {
+        auto& r         = task.suspend_reason.as<ByExtEvent>();
         r.event->waiter = nullptr;
     } break;
     case SuspendReason::index_of<BySingleEvent>: {
@@ -147,8 +195,8 @@ auto Runner::destroy_task(Task& task) -> bool {
     case SuspendReason::index_of<ByMultiEvent>: {
         auto& waiters = task.suspend_reason.as<ByMultiEvent>().event->waiters;
         for(auto i = usize(0); i < waiters.size(); i += 1) {
-            if(waiters[i] == &task) {
-                impl::erase_at(waiters, i);
+            if(waiters[i].task == &task) {
+                erase_at(waiters, i);
                 break;
             }
         }
@@ -177,10 +225,10 @@ auto Runner::remove_task(Task& task) -> bool {
     if(destroy_task(task)) {
         // find index after destroy, siblings may have changed during handle.destroy()
         auto&      siblings = task.parent->children;
-        const auto index    = impl::find_index(task);
+        const auto index    = find_index(task);
         ensure(index < siblings.size());
-        impl::delete_task(&task);
-        impl::erase_at(siblings, index);
+        delete_task(&task);
+        erase_at(siblings, index);
     }
     return true;
 }
@@ -204,10 +252,10 @@ auto Runner::join(TaskHandle& handle) -> bool {
     ensure(child.parent == &root, "tried to steal child task from another task");
 
     // transfer task object
-    const auto index = impl::find_index(child);
+    const auto index = find_index(child);
     ensure(index < root.children.size());
     ensure(current_task->children.append(&child));
-    impl::erase_at(root.children, index);
+    erase_at(root.children, index);
     child.parent = current_task;
     return true;
 }
@@ -216,31 +264,44 @@ auto Runner::delay(const u64 duration_us) -> void {
     current_task->suspend_reason.emplace<ByTimer>(now_us() + duration_us);
 }
 
-auto Runner::io_wait(IOEvent& event) -> void {
-    event.waiter = current_task;
-    current_task->suspend_reason.emplace<ByIO>(&event);
+auto Runner::event_wait(ExtEvent& event, ExtAWaiter& awaiter, const Duration timeout) -> void {
+    event.waiter  = current_task;
+    event.awaiter = &awaiter;
+    current_task->suspend_reason.emplace<ByExtEvent>(&event, timeout_to_deadline(timeout));
 }
 
-auto Runner::event_wait(SingleEvent& event) -> void {
-    current_task->suspend_reason.emplace<BySingleEvent>(&event);
-    event.waiter = current_task;
+auto Runner::event_notify(ExtEvent& event) -> void {
+    // may be called from isr, do not rely on current_task
+    if(event.waiter != nullptr) {
+        event.awaiter->result   = EventResult::Ok;
+        any_ext_event_available = true;
+    }
+}
+
+auto Runner::event_wait(SingleEvent& event, SingleAWaiter& awaiter, const Duration timeout) -> void {
+    current_task->suspend_reason.emplace<BySingleEvent>(&event, timeout_to_deadline(timeout));
+    event.waiter  = current_task;
+    event.awaiter = &awaiter;
 }
 
 auto Runner::event_notify(SingleEvent& event) -> void {
     event.waiter->suspend_reason = {};
     event.waiter                 = nullptr;
+    event.awaiter->result        = true;
 }
 
-auto Runner::event_wait(MultiEvent& event) -> void {
-    current_task->suspend_reason.emplace<ByMultiEvent>(&event);
-    event.waiters.append(current_task);
+auto Runner::event_wait(MultiEvent& event, MultiAWaiter& awaiter, const Duration timeout) -> void {
+    current_task->suspend_reason.emplace<ByMultiEvent>(&event, timeout_to_deadline(timeout));
+    event.waiters.append({current_task, &awaiter});
 }
 
 auto Runner::event_notify(MultiEvent& event, usize n) -> void {
     auto& waiters = event.waiters;
     n             = (n == 0 || n > waiters.size()) ? waiters.size() : n;
     for(auto i = usize(0); i < n; i += 1) {
-        waiters[i]->suspend_reason = {};
+        const auto [task, awaiter] = waiters[i];
+        task->suspend_reason       = {};
+        awaiter->result            = true;
     }
     for(auto i = n; i < waiters.size(); i += 1) {
         waiters[i - n] = waiters[i];
@@ -268,7 +329,7 @@ loop:
         goto loop;
     }
 
-    any_io_event_available = false;
+    any_ext_event_available = false;
 
     auto result = GatheringResult{.now = now_us()};
     ensure(gather_resumable_tasks(root, result));
@@ -279,7 +340,7 @@ loop:
     }
 
     if(result.poll_io) {
-        while(now_us() < result.wake && !any_io_event_available) {
+        while(now_us() < result.wake && !any_ext_event_available) {
             // idle until the next timer expires or io events
         }
     } else {

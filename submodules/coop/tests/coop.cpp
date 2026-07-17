@@ -30,7 +30,7 @@ auto test_single_event() -> bool {
     auto got    = 0;
 
     ensure(runner.push_task([](coop::SingleEvent& event, int& got) -> coop::Async<void> {
-        co_await event;
+        co_await coop::wait_for_event(event);
         got = 1;
     }(event, got)));
     ensure(runner.push_task([](coop::SingleEvent& event) -> coop::Async<void> {
@@ -53,7 +53,7 @@ auto test_single_event_prenotify() -> bool {
 
     event.notify(); // fires before any await
     ensure(runner.push_task([](coop::SingleEvent& event, int& got) -> coop::Async<void> {
-        co_await event;
+        co_await coop::wait_for_event(event);
         got = 1;
     }(event, got)));
 
@@ -96,7 +96,7 @@ auto test_multi_event() -> bool {
     auto woken  = 0;
 
     const auto waiter = [](coop::MultiEvent& event, int& woken) -> coop::Async<void> {
-        co_await event;
+        co_await coop::wait_for_event(event);
         woken += 1;
     };
     ensure(runner.push_task(waiter(event, woken)));

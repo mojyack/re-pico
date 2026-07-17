@@ -1,16 +1,15 @@
 #pragma once
-#include "multi-event-pre.hpp"
+#include "multi-event.hpp"
 
 namespace coop {
 struct Mutex;
 
-struct [[nodiscard]] MutexAwaiter {
+struct [[nodiscard]] MutexAwaiter : MultiAWaiter {
     Mutex* mutex;
 
     auto await_ready() const -> bool;
-    template <CoHandleLike CoHandle>
-    auto await_suspend(CoHandle caller_task) -> void;
-    auto await_resume() const -> void {}
+
+    MutexAwaiter(Mutex& mutex);
 };
 
 struct Mutex {

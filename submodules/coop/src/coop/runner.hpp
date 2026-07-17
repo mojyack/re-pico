@@ -12,9 +12,6 @@
 namespace coop {
 namespace impl {
 auto new_task(Task src) -> Task*;
-auto delete_task(Task* task) -> void;
-auto find_index(Task& child) -> usize;
-auto erase_at(noxx::Vector<Task*>& vec, usize index) -> void;
 } // namespace impl
 
 template <CoHandleLike CoHandle>
