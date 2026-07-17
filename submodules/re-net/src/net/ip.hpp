@@ -48,6 +48,10 @@ struct Proto {
 // rfc 1071 ones-complement sum, folded to 16 bits (host order return)
 auto checksum(noxx::Span<const u8> data) -> u16;
 
+// the same sum over the ipv4 pseudo-header (src/dst/proto/len) followed by an
+// l4 segment; used by udp and tcp
+auto l4_checksum(IPv4Addr src, IPv4Addr dst, u8 proto, noxx::Span<const u8> segment) -> u16;
+
 // handle a received ipv4 frame (eth header already consumed); src_mac is the
 // ethernet source, learned into the arp cache
 auto input(Stack& stack, MacAddrRef src_mac, AutoPacket packet) -> coop::Async<void>;

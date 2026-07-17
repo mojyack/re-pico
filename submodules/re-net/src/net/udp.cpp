@@ -6,42 +6,8 @@
 #include <noxx/assert.hpp>
 
 namespace net::udp {
-namespace {
-// unfolded ones-complement word sum; an odd trailing byte is zero-padded
-auto sum_words(u32 sum, const noxx::Span<const u8> data) -> u32 {
-    for(auto i = usize(0); i < data.size(); i += 2) {
-        const auto hi = u32(data[i]);
-        const auto lo = i + 1 < data.size() ? u32(data[i + 1]) : u32(0);
-        sum += (hi << 8) | lo;
-    }
-    return sum;
-}
-} // namespace
-
 auto checksum(const IPv4Addr src, const IPv4Addr dst, const noxx::Span<const u8> segment) -> u16 {
-    struct Pseudo {
-        IPv4Addr src;
-        IPv4Addr dst;
-        u8       pad;
-        u8       proto;
-        u16      len;
-    } __attribute__((packed));
-    static_assert(sizeof(Pseudo) == 12);
-
-    const auto psoude = Pseudo{
-        .src   = src,
-        .dst   = dst,
-        .pad   = 0,
-        .proto = ipv4::Proto::Udp,
-        .len   = noxx::byteswap(u16(segment.size())),
-    };
-
-    auto sum = sum_words(0, {(const u8*)&psoude, sizeof(psoude)});
-    sum      = sum_words(sum, segment);
-    while((sum >> 16) != 0) {
-        sum = (sum & 0xffff) + (sum >> 16);
-    }
-    return u16(~sum);
+    return ipv4::l4_checksum(src, dst, ipv4::Proto::Udp, segment);
 }
 
 auto bind(Stack& stack, Socket& socket) -> bool {

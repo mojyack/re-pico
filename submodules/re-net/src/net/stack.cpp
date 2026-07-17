@@ -50,6 +50,7 @@ auto Stack::init(NetIf& netif) -> void {
 auto Stack::tick(const u64 now_ms) -> coop::Async<void> {
     this->now_ms = now_ms;
     co_await arp::tick(*this, now_ms);
+    tcp::tick(*this, now_ms);
 }
 
 auto Stack::send(AutoPacket packet) -> coop::Async<bool> {

@@ -10,10 +10,14 @@
 // argument makes the board ping that address once a second. passing "dhcp" as
 // the address instead runs the dhcp client against a server on the tap, e.g.
 //   dnsmasq -d -i tap0 --bind-interfaces --dhcp-range=192.168.7.100,192.168.7.150,1h
+// instead of a ping target, "tcp:PORT" runs a tcp echo server (`nc 192.168.7.2
+// PORT`) and "tcp:IP:PORT" connects out, sends a greeting and prints the reply
+// (`nc -l 192.168.7.1 PORT`)
 #include <fcntl.h>
 #include <linux/if.h>
 #include <linux/if_tun.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
@@ -25,6 +29,7 @@
 #include <net/dhcp.hpp>
 #include <net/icmp.hpp>
 #include <net/stack.hpp>
+#include <net/tcp.hpp>
 
 #include <noxx/assert.hpp>
 #include <noxx/malloc.hpp>
@@ -130,6 +135,64 @@ auto ping_task(net::Stack& stack, const net::IPv4Addr target) -> coop::Async<voi
     }
 }
 
+// serve one tcp connection at a time, echoing everything back
+auto tcp_echo_task(net::Stack& stack, const u16 port) -> coop::Async<void> {
+    auto conn = net::tcp::Conn();
+    while(true) {
+        // a prior connection may linger in time-wait until tick() reaps it
+        while(conn.state != net::tcp::State::Closed) {
+            co_await coop::sleep_ms(500);
+        }
+        if(!conn.listen(stack, port)) {
+            co_return;
+        }
+        printf("tcp: listening on %u\n", port);
+        if(!co_await conn.accept(stack)) {
+            continue;
+        }
+        const auto& a = conn.remote_addr;
+        printf("tcp: accepted from %u.%u.%u.%u:%u\n", a[0], a[1], a[2], a[3], conn.remote_port);
+        auto buf = noxx::Array<u8, 1024>();
+        while(true) {
+            const auto count = co_await conn.recv(stack, buf);
+            if(!count || *count == 0) {
+                break;
+            }
+            printf("tcp: echoing %zu bytes\n", *count);
+            if(!co_await conn.send(stack, {buf.data, *count})) {
+                break;
+            }
+        }
+        co_await conn.close(stack);
+        printf("tcp: connection closed\n");
+    }
+}
+
+// connect out, send a greeting and print whatever comes back until eof
+auto tcp_client_task(net::Stack& stack, const net::IPv4Addr addr, const u16 port) -> coop::Async<void> {
+    auto conn = net::tcp::Conn();
+    if(!co_await conn.connect(stack, addr, port)) {
+        printf("tcp: connect failed\n");
+        co_return;
+    }
+    printf("tcp: connected from port %u\n", conn.local_port);
+    const auto greeting = noxx::StringView("hello from re-net\n");
+    if(!co_await conn.send(stack, {(const u8*)greeting.data(), greeting.size()})) {
+        printf("tcp: send failed\n");
+    }
+    auto buf = noxx::Array<u8, 1024>();
+    while(true) {
+        const auto count = co_await conn.recv(stack, buf);
+        if(!count || *count == 0) {
+            break;
+        }
+        fwrite(buf.data, 1, *count, stdout);
+        fflush(stdout);
+    }
+    co_await conn.close(stack);
+    printf("tcp: done\n");
+}
+
 // announce dhcp state changes; the client task itself is silent
 auto dhcp_report_task(net::dhcp::Client& client, net::Stack& stack) -> coop::Async<void> {
     auto last = net::dhcp::State::Idle;
@@ -183,11 +246,23 @@ auto main(const int argc, const char* const argv[]) -> int {
         }
     }
 
-    // optional outbound ping target: one echo request per second
+    // optional traffic generator: "tcp:PORT" echo server, "tcp:IP:PORT"
+    // client, or a ping target (one echo request per second)
     if(argc >= 4) {
-        unwrap(target, net::parse_ip(argv[3]));
-        stack.on_icmp_echo_reply = on_echo_reply;
-        ensure(runner.push_task(ping_task(stack, target)));
+        if(strncmp(argv[3], "tcp:", 4) == 0) {
+            const auto rest  = argv[3] + 4;
+            const auto colon = strchr(rest, ':');
+            if(colon == nullptr) {
+                ensure(runner.push_task(tcp_echo_task(stack, u16(atoi(rest)))));
+            } else {
+                unwrap(addr, net::parse_ip({rest, usize(colon - rest)}));
+                ensure(runner.push_task(tcp_client_task(stack, addr, u16(atoi(colon + 1)))));
+            }
+        } else {
+            unwrap(target, net::parse_ip(argv[3]));
+            stack.on_icmp_echo_reply = on_echo_reply;
+            ensure(runner.push_task(ping_task(stack, target)));
+        }
     }
 
     printf("tap-host: bridging %s, waiting for frames\n", argv[1]);

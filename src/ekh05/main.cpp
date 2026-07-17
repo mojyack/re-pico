@@ -22,6 +22,7 @@
 #include <net/ip.hpp>
 #include <net/packet.hpp>
 #include <net/stack.hpp>
+#include <net/tcp.hpp>
 #include <noxx/bits.hpp>
 #include <noxx/charconv.hpp>
 #include <noxx/format.hpp>
@@ -92,6 +93,8 @@ auto dump_task_tree(const coop::Task& task, const int indent = 0) -> void {
 auto halow_host_table = noxx::Optional<halow::HostTable>();
 auto netstack         = net::Stack();
 auto dhcp_client      = net::dhcp::Client();
+auto tcp_conn         = net::tcp::Conn(); // console-managed outbound connection
+auto tcp_echo_conn    = net::tcp::Conn(); // owned by tcp_echo_task
 
 // icmp echo reply sink for `net ping`; runs in link_task context, so blocking i/o
 auto on_ping_reply(net::Stack& /*self*/, const net::IPv4Addr src, const u16 /*id*/, const u16 seq, const noxx::Span<const u8> data) -> void {
@@ -109,6 +112,33 @@ auto hexdump(const u8* const data, const usize size) -> coop::Async<bool> {
         co_await print("\n");
     }
     co_return true;
+}
+
+// serve one tcp connection at a time, echoing everything back
+auto tcp_echo_task(net::Stack& stack, const u16 port) -> coop::Async<void> {
+#define error_value
+    while(true) {
+        // a prior connection may linger in time-wait until tick() reaps it
+        while(tcp_echo_conn.state != net::tcp::State::Closed) {
+            co_await coop::sleep_ms(500);
+        }
+        co_ensure(tcp_echo_conn.listen(stack, port));
+        co_ensure(co_await tcp_echo_conn.accept(stack));
+        co_await printf<"tcp: accepted from {}:{}\n">(tcp_echo_conn.remote_addr, tcp_echo_conn.remote_port);
+        auto buf = noxx::Array<u8, 512>();
+        while(true) {
+            const auto count = co_await tcp_echo_conn.recv(stack, buf);
+            if(!count || *count == 0) {
+                break;
+            }
+            if(!co_await tcp_echo_conn.send(stack, {buf.data, *count})) {
+                break;
+            }
+        }
+        co_await tcp_echo_conn.close(stack);
+        co_await print("tcp: connection closed\n");
+    }
+#undef error_value
 }
 
 constexpr auto help = R"(commands:
@@ -131,6 +161,8 @@ constexpr auto help = R"(commands:
     net dhcp                         acquire an address over dhcp (or print the lease)
     net ping <addr> [count]          send icmp echo requests
     net arp [ipv4]                   broadcast a who-has, or print the arp table
+    net tcp echo <port>              start a tcp echo server
+    net tcp send <addr> <port> <text>  connect, send a line, print the reply
   mac               print halow mac address
   version           print dbgmcu versions
   ps                print process tree
@@ -354,8 +386,42 @@ auto handle_command(noxx::StringView line) -> coop::Async<bool> {
                     co_ensure(co_await printf<"{} -> {} {}\n">(e.ip, e.mac, e.state == net::arp::State::Resolved ? "resolved" : "pending"));
                 }
             }
+        } else if(elms[1] == "tcp") {
+            co_ensure(netstack.netif != nullptr, "run net up first");
+            co_ensure(elms.size() >= 3, "usage: net tcp <echo|send>");
+            if(elms[2] == "echo") {
+                co_ensure(elms.size() >= 4, "usage: net tcp echo <port>");
+                co_unwrap(port, noxx::from_chars<u16>(elms[3]));
+                const auto runner = co_await coop::reveal_runner();
+                co_ensure(runner->push_task(tcp_echo_task(netstack, port)));
+                co_ensure(co_await printf<"tcp echo server on port {}\n">(port));
+            } else if(elms[2] == "send") {
+                co_ensure(elms.size() >= 6, "usage: net tcp send <addr> <port> <text>");
+                co_unwrap(addr, net::parse_ip(elms[3]));
+                co_unwrap(port, noxx::from_chars<u16>(elms[4]));
+                co_ensure(tcp_conn.state == net::tcp::State::Closed, "connection in use (time-wait?)");
+                co_ensure(co_await tcp_conn.connect(netstack, addr, port), "connect failed");
+                co_ensure(co_await printf<"connected from port {}\n">(tcp_conn.local_port));
+                do {
+#pragma push_macro("error_act")
+#define error_act break
+                    ensure(co_await tcp_conn.send(netstack, elms[5]));
+                    ensure(co_await tcp_conn.send(netstack, {(const u8*)"\n", 1}));
+                    auto       buf = noxx::Array<u8, 256>();
+                    const auto got = co_await tcp_conn.recv(netstack, {buf.data, buf.size() - 1});
+                    if(got && *got > 0) {
+                        buf[*got] = 0;
+                        co_await print((const char*)buf.data);
+                    }
+#pragma pop_macro("error_act")
+                } while(0);
+                co_await tcp_conn.close(netstack);
+                co_await print("closed\n");
+            } else {
+                co_ensure(false, "usage: net tcp <echo|send>");
+            }
         } else {
-            co_ensure(false, "usage: net <up|ip|dhcp|ping|arp>");
+            co_ensure(false, "usage: net <up|ip|dhcp|ping|arp|tcp>");
         }
     } else if(elms[0] == "mac") {
         co_ensure(halow_host_table, "run halow cmd first");

@@ -14,6 +14,7 @@
 #include <net/icmp.hpp>
 #include <net/ip.hpp>
 #include <net/stack.hpp>
+#include <net/tcp.hpp>
 #include <net/udp.hpp>
 
 #include <noxx/assert.hpp>
@@ -324,10 +325,10 @@ auto build_udp(u8* const out, const net::MacAddr src_mac, const net::IPv4Addr sr
     return 14 + sizeof(net::ipv4::Header) + udp_len;
 }
 
-auto udp_rx_src       = net::IPv4Addr();
-auto udp_rx_src_port  = u16(0);
-auto udp_rx_data      = noxx::Array<u8, 64>();
-auto udp_rx_len       = usize(0);
+auto udp_rx_src      = net::IPv4Addr();
+auto udp_rx_src_port = u16(0);
+auto udp_rx_data     = noxx::Array<u8, 64>();
+auto udp_rx_len      = usize(0);
 
 auto on_udp_rx(net::Stack& /*stack*/, net::udp::Socket& /*self*/, const net::IPv4Addr src, const u16 src_port, const noxx::Span<const u8> data) -> void {
     udp_rx_src      = src;
@@ -344,9 +345,9 @@ auto test_udp() -> coop::Async<bool> {
     make_stack(netif, stack);
     cap_head = cap_tail = 0;
 
-    auto socket   = net::udp::Socket();
-    socket.port   = 7;
-    socket.on_rx  = on_udp_rx;
+    auto socket  = net::udp::Socket();
+    socket.port  = 7;
+    socket.on_rx = on_udp_rx;
     co_ensure(net::udp::bind(stack, socket));
     auto dup = net::udp::Socket();
     dup.port = 7;
@@ -424,9 +425,9 @@ auto find_option(const noxx::Span<const u8> options, const u8 code) -> noxx::Opt
 
 // build an ethernet+ipv4+udp+dhcp server reply into out; returns total length
 auto build_dhcp_reply(u8* const out, const u8 msg_type, const u32 xid, const net::IPv4Addr ip_dst) -> usize {
-    auto  dhcp   = noxx::Array<u8, sizeof(net::dhcp::Header) + 32>();
-    auto& header = *(net::dhcp::Header*)dhcp.data;
-    header       = net::dhcp::Header{};
+    auto  dhcp    = noxx::Array<u8, sizeof(net::dhcp::Header) + 32>();
+    auto& header  = *(net::dhcp::Header*)dhcp.data;
+    header        = net::dhcp::Header{};
     header.op     = net::dhcp::Op::BootReply;
     header.htype  = net::dhcp::HType::Ethernet;
     header.hlen   = net::MacAddr::size();
@@ -533,6 +534,354 @@ auto test_dhcp() -> coop::Async<bool> {
     handle.cancel();
     co_return true;
 }
+
+// tcp wire helpers
+
+// build an ethernet+ipv4+tcp frame into out; returns total length
+auto build_tcp(u8* const out, const u16 src_port, const u16 dst_port, const u32 seq, const u32 ack, const u8 flags, const noxx::Span<const u8> payload, const u16 wnd = 4096) -> usize {
+    put_eth(out, our_mac, peer_mac, net::EtherType::IPv4);
+
+    const auto tcp_len = sizeof(net::tcp::Header) + payload.size();
+    auto&      tcp     = *(net::tcp::Header*)(out + 14 + sizeof(net::ipv4::Header));
+    tcp                = net::tcp::Header{};
+    tcp.src_port       = noxx::byteswap(src_port);
+    tcp.dst_port       = noxx::byteswap(dst_port);
+    tcp.seq            = noxx::byteswap(seq);
+    tcp.ack            = noxx::byteswap(ack);
+    tcp.data_off       = u8(sizeof(net::tcp::Header) / 4 << 4);
+    tcp.flags          = flags;
+    tcp.window         = noxx::byteswap(wnd);
+    noxx::memcpy((u8*)&tcp + sizeof(tcp), payload.data, payload.size());
+    tcp.checksum = noxx::byteswap(net::tcp::checksum(peer_ip, our_ip, {(const u8*)&tcp, tcp_len}));
+
+    auto& ip       = *(net::ipv4::Header*)(out + 14);
+    ip             = net::ipv4::Header{};
+    ip.version_ihl = 0x45;
+    ip.total_len   = noxx::byteswap(u16(sizeof(net::ipv4::Header) + tcp_len));
+    ip.ttl         = 64;
+    ip.proto       = net::ipv4::Proto::Tcp;
+    ip.src         = peer_ip;
+    ip.dst         = our_ip;
+    ip.checksum    = noxx::byteswap(net::ipv4::checksum({(const u8*)&ip, sizeof(ip)}));
+    return 14 + sizeof(net::ipv4::Header) + tcp_len;
+}
+
+// pop one captured frame and validate the ip/tcp layers; returns the tcp
+// header (payload follows per data_off) within the passed packet
+auto check_tcp_tx(net::AutoPacket& packet) -> const net::tcp::Header* {
+    constexpr auto error_value = nullptr;
+
+    packet = cap_pop();
+    ensure(packet.get() != nullptr);
+    const auto& eth = *(const net::EthernetHeader*)packet->data();
+    ensure(noxx::byteswap(eth.ethertype) == net::EtherType::IPv4);
+    const auto& ip = *(const net::ipv4::Header*)(packet->data() + 14);
+    ensure(ip.proto == net::ipv4::Proto::Tcp);
+    ensure(ip.dst == peer_ip);
+    const auto tcp_len = usize(noxx::byteswap(ip.total_len)) - sizeof(ip);
+    const auto tcp     = (const net::tcp::Header*)(packet->data() + 14 + sizeof(ip));
+    ensure(net::tcp::checksum(ip.src, ip.dst, {(const u8*)tcp, tcp_len}) == 0);
+    return tcp;
+}
+
+auto tcp_payload(const net::AutoPacket& packet) -> noxx::Span<const u8> {
+    const auto& ip      = *(const net::ipv4::Header*)(packet->data() + 14);
+    const auto  tcp_len = usize(noxx::byteswap(ip.total_len)) - sizeof(ip);
+    const auto  tcp     = (const u8*)(packet->data() + 14 + sizeof(ip));
+    const auto  off     = usize(tcp[12] >> 4) * 4;
+    return {tcp + off, tcp_len - off};
+}
+
+constexpr auto peer_iss = u32(1000);
+
+// drive the client handshake against a scripted peer on port 80; returns the
+// established connection's iss via out
+auto tcp_handshake(net::NetIf& netif, net::Stack& stack, net::tcp::Conn& conn, u32& iss) -> coop::Async<bool> {
+    constexpr auto error_value = false;
+
+    auto  ok     = false;
+    auto  handle = coop::TaskHandle();
+    auto& runner = *co_await coop::reveal_runner();
+    co_ensure(runner.push_task([](net::tcp::Conn& conn, net::Stack& stack, bool& ok) -> coop::Async<void> {
+        ok = co_await conn.connect(stack, peer_ip, 80);
+    }(conn, stack, ok),
+                               &handle));
+    co_await coop::sleep_ms(1);
+
+    // a syn with our mss option goes out
+    co_ensure(cap_count() == 1);
+    auto        packet = net::AutoPacket();
+    const auto* syn    = check_tcp_tx(packet);
+    co_ensure(syn != nullptr);
+    co_ensure(syn->flags == net::tcp::Flags::Syn);
+    co_ensure(noxx::byteswap(syn->dst_port) == 80);
+    co_ensure((syn->data_off >> 4) == 6, "mss option expected");
+    iss                   = noxx::byteswap(syn->seq);
+    const auto local_port = noxx::byteswap(syn->src_port);
+
+    // syn-ack completes the handshake and elicits an ack
+    auto       frame = noxx::Array<u8, 128>();
+    const auto n     = build_tcp(frame.data, 80, local_port, peer_iss, iss + 1, net::tcp::Flags::Syn | net::tcp::Flags::Ack, {});
+    co_await inject(netif, {frame.data, n});
+    co_await coop::sleep_ms(1);
+    co_ensure(ok, "connect did not resolve");
+    co_ensure(conn.state == net::tcp::State::Established);
+    co_ensure(cap_count() == 1);
+    const auto* ack = check_tcp_tx(packet);
+    co_ensure(ack != nullptr);
+    co_ensure(ack->flags == net::tcp::Flags::Ack);
+    co_ensure(noxx::byteswap(ack->seq) == iss + 1);
+    co_ensure(noxx::byteswap(ack->ack) == peer_iss + 1);
+    co_return true;
+}
+
+auto test_tcp_client() -> coop::Async<bool> {
+    constexpr auto error_value = false;
+
+    auto netif = CapNetIf();
+    auto stack = net::Stack();
+    make_stack(netif, stack);
+    co_await net::arp::cache(stack, peer_ip, peer_mac);
+    cap_head = cap_tail = 0;
+
+    auto conn = net::tcp::Conn();
+    auto iss  = u32(0);
+    co_ensure(co_await tcp_handshake(netif, stack, conn, iss));
+    const auto local_port = conn.local_port;
+
+    // peer data lands in the ring, gets acked, and recv returns it
+    constexpr auto hello = noxx::to_array<u8>({'h', 'e', 'l', 'l', 'o'});
+    auto           frame = noxx::Array<u8, 128>();
+    auto           n     = build_tcp(frame.data, 80, local_port, peer_iss + 1, iss + 1, net::tcp::Flags::Ack | net::tcp::Flags::Psh, hello);
+    co_await inject(netif, {frame.data, n});
+    co_ensure(cap_count() == 1);
+    auto        packet = net::AutoPacket();
+    const auto* ack    = check_tcp_tx(packet);
+    co_ensure(ack != nullptr);
+    co_ensure(noxx::byteswap(ack->ack) == peer_iss + 1 + hello.size());
+    auto buf = noxx::Array<u8, 64>();
+    co_unwrap(got, co_await conn.recv(stack, buf));
+    co_ensure(got == hello.size());
+    co_ensure(noxx::memcmp(buf.data, hello.data, hello.size()) == 0);
+
+    // a duplicate of the same segment is re-acked but not re-delivered
+    co_await inject(netif, {frame.data, n});
+    co_ensure(cap_count() == 1);
+    (void)cap_pop();
+    co_ensure(conn.rx_len == 0);
+
+    // our data goes out and send resolves on the ack
+    auto  sent   = false;
+    auto  handle = coop::TaskHandle();
+    auto& runner = *co_await coop::reveal_runner();
+    co_ensure(runner.push_task([](net::tcp::Conn& conn, net::Stack& stack, bool& sent) -> coop::Async<void> {
+        constexpr auto world = noxx::to_array<u8>({'w', 'o', 'r', 'l', 'd'});
+        sent                 = co_await conn.send(stack, world);
+    }(conn, stack, sent),
+                               &handle));
+    co_await coop::sleep_ms(1);
+    co_ensure(cap_count() == 1);
+    const auto* seg = check_tcp_tx(packet);
+    co_ensure(seg != nullptr);
+    co_ensure((seg->flags & net::tcp::Flags::Psh) != 0);
+    co_ensure(noxx::byteswap(seg->seq) == iss + 1);
+    const auto body = tcp_payload(packet);
+    co_ensure(body.size() == 5);
+    co_ensure(noxx::memcmp(body.data, "world", 5) == 0);
+    n = build_tcp(frame.data, 80, local_port, peer_iss + 1 + hello.size(), iss + 6, net::tcp::Flags::Ack, {});
+    co_await inject(netif, {frame.data, n});
+    co_await coop::sleep_ms(1);
+    co_ensure(sent, "send did not resolve");
+
+    // close: fin out, peer acks then closes; we end in time-wait
+    auto closed = false;
+    co_ensure(runner.push_task([](net::tcp::Conn& conn, net::Stack& stack, bool& closed) -> coop::Async<void> {
+        co_await conn.close(stack);
+        closed = true;
+    }(conn, stack, closed),
+                               &handle));
+    co_await coop::sleep_ms(1);
+    co_ensure(cap_count() == 1);
+    const auto* fin = check_tcp_tx(packet);
+    co_ensure(fin != nullptr);
+    co_ensure((fin->flags & net::tcp::Flags::Fin) != 0);
+    co_ensure(noxx::byteswap(fin->seq) == iss + 6);
+    n = build_tcp(frame.data, 80, local_port, peer_iss + 6, iss + 7, net::tcp::Flags::Ack, {});
+    co_await inject(netif, {frame.data, n});
+    co_await coop::sleep_ms(1);
+    co_ensure(conn.state == net::tcp::State::FinWait2);
+    n = build_tcp(frame.data, 80, local_port, peer_iss + 6, iss + 7, net::tcp::Flags::Fin | net::tcp::Flags::Ack, {});
+    co_await inject(netif, {frame.data, n});
+    co_ensure(cap_count() == 1);
+    (void)cap_pop(); // the ack of the peer's fin
+    co_ensure(conn.state == net::tcp::State::TimeWait);
+    co_await coop::sleep_ms(1);
+    co_ensure(closed, "close did not resolve");
+
+    // the time-wait linger expires via tick and frees the table slot
+    co_await stack.tick(net::tcp::time_wait_ms + 1);
+    co_ensure(conn.state == net::tcp::State::Closed);
+    auto bound = false;
+    for(const auto& slot : stack.tcp.conns.data) {
+        bound = bound || slot == &conn;
+    }
+    co_ensure(!bound, "time-wait slot not reaped");
+    co_return true;
+}
+
+auto test_tcp_listen() -> coop::Async<bool> {
+    constexpr auto error_value = false;
+
+    auto netif = CapNetIf();
+    auto stack = net::Stack();
+    make_stack(netif, stack);
+    co_await net::arp::cache(stack, peer_ip, peer_mac);
+    cap_head = cap_tail = 0;
+
+    auto conn = net::tcp::Conn();
+    co_ensure(conn.listen(stack, 7777));
+
+    // syn elicits a syn-ack
+    auto frame = noxx::Array<u8, 128>();
+    auto n     = build_tcp(frame.data, 41000, 7777, peer_iss, 0, net::tcp::Flags::Syn, {});
+    co_await inject(netif, {frame.data, n});
+    co_ensure(conn.state == net::tcp::State::SynReceived);
+    co_ensure(cap_count() == 1);
+    auto        packet = net::AutoPacket();
+    const auto* synack = check_tcp_tx(packet);
+    co_ensure(synack != nullptr);
+    co_ensure(synack->flags == (net::tcp::Flags::Syn | net::tcp::Flags::Ack));
+    co_ensure(noxx::byteswap(synack->ack) == peer_iss + 1);
+    const auto iss = noxx::byteswap(synack->seq);
+
+    // the final ack establishes; data+fin then drains through recv
+    n = build_tcp(frame.data, 41000, 7777, peer_iss + 1, iss + 1, net::tcp::Flags::Ack, {});
+    co_await inject(netif, {frame.data, n});
+    co_ensure(conn.state == net::tcp::State::Established);
+    co_ensure(co_await conn.accept(stack));
+
+    constexpr auto ping = noxx::to_array<u8>({'p', 'i', 'n', 'g'});
+    n                   = build_tcp(frame.data, 41000, 7777, peer_iss + 1, iss + 1, net::tcp::Flags::Ack | net::tcp::Flags::Psh | net::tcp::Flags::Fin, ping);
+    co_await inject(netif, {frame.data, n});
+    co_ensure(conn.state == net::tcp::State::CloseWait);
+    co_ensure(cap_count() == 1);
+    (void)cap_pop();
+    auto buf = noxx::Array<u8, 64>();
+    co_unwrap(got, co_await conn.recv(stack, buf));
+    co_ensure(got == ping.size());
+    co_unwrap(eof, co_await conn.recv(stack, buf));
+    co_ensure(eof == 0, "expected orderly eof");
+
+    // close from close-wait: fin out, its ack fully closes
+    auto  handle = coop::TaskHandle();
+    auto& runner = *co_await coop::reveal_runner();
+    co_ensure(runner.push_task(conn.close(stack), &handle));
+    co_await coop::sleep_ms(1);
+    co_ensure(conn.state == net::tcp::State::LastAck);
+    co_ensure(cap_count() == 1);
+    const auto* fin = check_tcp_tx(packet);
+    co_ensure(fin != nullptr);
+    co_ensure((fin->flags & net::tcp::Flags::Fin) != 0);
+    n = build_tcp(frame.data, 41000, 7777, peer_iss + 5 + 1, iss + 2, net::tcp::Flags::Ack, {});
+    co_await inject(netif, {frame.data, n});
+    co_await coop::sleep_ms(1);
+    co_ensure(conn.state == net::tcp::State::Closed);
+    co_return true;
+}
+
+auto test_tcp_refused() -> coop::Async<bool> {
+    constexpr auto error_value = false;
+
+    auto netif = CapNetIf();
+    auto stack = net::Stack();
+    make_stack(netif, stack);
+    co_await net::arp::cache(stack, peer_ip, peer_mac);
+    cap_head = cap_tail = 0;
+
+    auto  conn   = net::tcp::Conn();
+    auto  done   = false;
+    auto  ok     = true;
+    auto  handle = coop::TaskHandle();
+    auto& runner = *co_await coop::reveal_runner();
+    co_ensure(runner.push_task([](net::tcp::Conn& conn, net::Stack& stack, bool& done, bool& ok) -> coop::Async<void> {
+        ok   = co_await conn.connect(stack, peer_ip, 81);
+        done = true;
+    }(conn, stack, done, ok),
+                               &handle));
+    co_await coop::sleep_ms(1);
+    co_ensure(cap_count() == 1);
+    auto        packet = net::AutoPacket();
+    const auto* syn    = check_tcp_tx(packet);
+    co_ensure(syn != nullptr);
+    const auto iss        = noxx::byteswap(syn->seq);
+    const auto local_port = noxx::byteswap(syn->src_port);
+
+    // rst+ack refuses the connection
+    auto       frame = noxx::Array<u8, 128>();
+    const auto n     = build_tcp(frame.data, 81, local_port, 0, iss + 1, net::tcp::Flags::Rst | net::tcp::Flags::Ack, {});
+    co_await inject(netif, {frame.data, n});
+    co_await coop::sleep_ms(1);
+    co_ensure(done, "connect did not resolve");
+    co_ensure(!ok, "refused connect must fail");
+    co_ensure(conn.state == net::tcp::State::Closed);
+
+    // a segment to a port nobody listens on elicits an rst
+    const auto m = build_tcp(frame.data, 41000, 9999, 555, 0, net::tcp::Flags::Syn, {});
+    co_await inject(netif, {frame.data, m});
+    co_ensure(cap_count() == 1);
+    const auto* rst = check_tcp_tx(packet);
+    co_ensure(rst != nullptr);
+    co_ensure((rst->flags & net::tcp::Flags::Rst) != 0);
+    co_ensure(noxx::byteswap(rst->ack) == 556, "rst must ack the syn");
+    co_return true;
+}
+
+auto test_tcp_retransmit() -> coop::Async<bool> {
+    constexpr auto error_value = false;
+
+    auto netif = CapNetIf();
+    auto stack = net::Stack();
+    make_stack(netif, stack);
+    co_await net::arp::cache(stack, peer_ip, peer_mac);
+    cap_head = cap_tail = 0;
+
+    auto conn = net::tcp::Conn();
+    auto iss  = u32(0);
+    co_ensure(co_await tcp_handshake(netif, stack, conn, iss));
+
+    // withhold the ack past the rto; the segment must be retransmitted
+    auto  sent   = false;
+    auto  handle = coop::TaskHandle();
+    auto& runner = *co_await coop::reveal_runner();
+    co_ensure(runner.push_task([](net::tcp::Conn& conn, net::Stack& stack, bool& sent) -> coop::Async<void> {
+        constexpr auto data = noxx::to_array<u8>({'r', 'e', 't', 'x'});
+        sent                = co_await conn.send(stack, data);
+    }(conn, stack, sent),
+                               &handle));
+    co_await coop::sleep_ms(1);
+    co_ensure(cap_count() == 1);
+    (void)cap_pop();
+    co_await coop::sleep_ms(net::tcp::rto_ms + 100);
+    co_ensure(cap_count() == 1, "expected a retransmission");
+    auto        packet = net::AutoPacket();
+    const auto* seg    = check_tcp_tx(packet);
+    co_ensure(seg != nullptr);
+    co_ensure(noxx::byteswap(seg->seq) == iss + 1, "retransmission must restart at snd_una");
+    const auto body = tcp_payload(packet);
+    co_ensure(body.size() == 4);
+
+    // the (late) ack lets send resolve
+    auto       frame = noxx::Array<u8, 128>();
+    const auto n     = build_tcp(frame.data, 80, conn.local_port, peer_iss + 1, iss + 5, net::tcp::Flags::Ack, {});
+    co_await inject(netif, {frame.data, n});
+    co_await coop::sleep_ms(1);
+    co_ensure(sent, "send did not resolve after the ack");
+
+    co_await conn.abort(stack);
+    co_ensure(conn.state == net::tcp::State::Closed);
+    (void)cap_pop(); // the rst
+    co_return true;
+}
 } // namespace
 
 auto main() -> int {
@@ -549,6 +898,10 @@ auto main() -> int {
     ensure(run_sync(test_arp_retry()));
     ensure(run_sync(test_udp()));
     ensure(run_sync(test_dhcp()));
+    ensure(run_sync(test_tcp_client()));
+    ensure(run_sync(test_tcp_listen()));
+    ensure(run_sync(test_tcp_refused()));
+    ensure(run_sync(test_tcp_retransmit()));
     printf("all tests passed\n");
     return 0;
 }

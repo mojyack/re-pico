@@ -31,6 +31,7 @@ EKH05_OBJS := $(OUT)/ekh05/main.o \
 			  $(OUT)/net/icmp.o \
 			  $(OUT)/net/udp.o \
 			  $(OUT)/net/dhcp.o \
+			  $(OUT)/net/tcp.o \
 			  $(OUT)/net/stack.o \
 			  $(OUT)/crypto/sha256.o \
 			  $(OUT)/crypto/hmac-sha256.o \

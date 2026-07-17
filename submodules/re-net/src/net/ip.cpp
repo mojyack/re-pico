@@ -5,6 +5,7 @@
 #include "icmp.hpp"
 #include "ip.hpp"
 #include "stack.hpp"
+#include "tcp.hpp"
 #include "udp.hpp"
 
 #include <noxx/assert.hpp>
@@ -37,17 +38,50 @@ constexpr auto flag_df     = u16(0x4000);
 auto ident = u16(0); // monotonic ipv4 id counter
 } // namespace
 
-auto checksum(const noxx::Span<const u8> data) -> u16 {
-    auto sum = u32(0);
+namespace {
+// unfolded ones-complement word sum; an odd trailing byte is zero-padded
+auto sum_words(u32 sum, const noxx::Span<const u8> data) -> u32 {
     for(auto i = usize(0); i < data.size(); i += 2) {
         const auto hi = u32(data[i]);
         const auto lo = i + 1 < data.size() ? u32(data[i + 1]) : u32(0);
         sum += (hi << 8) | lo;
     }
+    return sum;
+}
+
+auto fold(u32 sum) -> u16 {
     while((sum >> 16) != 0) {
         sum = (sum & 0xffff) + (sum >> 16);
     }
     return u16(~sum);
+}
+} // namespace
+
+auto checksum(const noxx::Span<const u8> data) -> u16 {
+    return fold(sum_words(0, data));
+}
+
+auto l4_checksum(const IPv4Addr src, const IPv4Addr dst, const u8 proto, const noxx::Span<const u8> segment) -> u16 {
+    struct Pseudo {
+        IPv4Addr src;
+        IPv4Addr dst;
+        u8       pad;
+        u8       proto;
+        u16      len;
+    } __attribute__((packed));
+    static_assert(sizeof(Pseudo) == 12);
+
+    const auto pseudo = Pseudo{
+        .src   = src,
+        .dst   = dst,
+        .pad   = 0,
+        .proto = proto,
+        .len   = noxx::byteswap(u16(segment.size())),
+    };
+
+    auto sum = sum_words(0, {(const u8*)&pseudo, sizeof(pseudo)});
+    sum      = sum_words(sum, segment);
+    return fold(sum);
 }
 
 auto input(Stack& stack, const MacAddrRef src_mac, AutoPacket packet) -> coop::Async<void> {
@@ -95,8 +129,11 @@ auto input(Stack& stack, const MacAddrRef src_mac, AutoPacket packet) -> coop::A
     case Proto::Udp:
         co_await udp::input(stack, src, dst, noxx::move(packet));
         break;
+    case Proto::Tcp:
+        co_await tcp::input(stack, src, dst, noxx::move(packet));
+        break;
     default:
-        break; // tcp arrives in a later phase
+        break;
     }
 }
 

@@ -5,6 +5,7 @@
 #include "arp.hpp"
 #include "ip.hpp"
 #include "netif.hpp"
+#include "tcp.hpp"
 #include "udp.hpp"
 
 namespace net {
@@ -16,6 +17,7 @@ struct Stack {
     IPv4Addr   gateway;
     arp::Table arp;
     udp::Table udp;
+    tcp::Table tcp;
     u64        now_ms = 0; // last tick() time, for protocol timers
 
     // application hook: an icmp echo reply arrived (payload is after the icmp
